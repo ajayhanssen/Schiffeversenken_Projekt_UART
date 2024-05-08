@@ -53,6 +53,8 @@ void blue_button_config(void){
     GPIOC->PUPDR |= GPIO_PUPDR_PUPDR13_0;
 }
 
+
+
 //-----------------Create Signatures of Statemachine functions
 void Idle(void);
 void StartS2(void);
@@ -115,15 +117,14 @@ void Idle(void){
     if(USART2->ISR & USART_ISR_RXNE){
         
         char received_char = USART2->RDR;
-        if(received_char == 'x'){
+        if(received_char == '\n'){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';
 
             if(msg_starts_with(rx_buffer, "START")){
                 parse_message(rx_buffer);
-                GPIOA->BSRR |= GPIO_BSRR_BS_5;
-                //curr_state = STARTS2;                        //-----------------Change the state, yConti becomes S2
+                curr_state = STARTS2;                       //-----------------Change the state, yConti becomes S2
             }else{
-                LOG("Invalid Message\n");
+                LOG("Invalid Message\n");                   //---------?--------Invalid message, maybe CHEATER-State?
             }
             rx_index = 0;
         }else if (rx_index < BUFFERSIZE - 1){
@@ -134,26 +135,43 @@ void Idle(void){
     // If the blue button is pressed, my yConti becomes S1
     if(!(GPIOC->IDR & GPIO_IDR_13)){
         LOG("START52216067\n")
-        //curr_state = STARTS1;
+        curr_state = STARTS1;
     }
 }
 
 //-----------------StartS1 State
 void StartS1(void){
-    LOG("StartS1 State\r\n");
-    curr_state = STARTS2;
+    //PARSE CS Player 2                                     //---------?--------Implement Player 2 Checksum parsing
+
+    uint8_t myboard[10*10] = {0};                           //------------------Init my board (Reihe*10 + Spalte (0-9!!!))
+    place_boat(myboard, 0, 0, 5, 0);                        //------------------Place my boats
+    place_boat(myboard, 2, 0, 4, 0);
+    place_boat(myboard, 1, 7, 4, 1);
+    place_boat(myboard, 4, 2, 3, 0);
+    place_boat(myboard, 6, 6, 3, 1);
+    place_boat(myboard, 6, 8, 3, 1);
+    place_boat(myboard, 9, 0, 2, 0);
+    place_boat(myboard, 9, 3, 2, 0);
+    place_boat(myboard, 7, 2, 2, 0);
+    place_boat(myboard, 6, 0, 2, 0);
+
+    char own_checksum[13] = {0};                            //------------------Init checksum
+    calculate_checksum(myboard, own_checksum);              //------------------Calculate own checksum
+    if(!(GPIOC->IDR & GPIO_IDR_13)){
+        LOG("%s\n", own_checksum);                             //------------------Send own checksum
+    }
 }
 
 //-----------------StartS2 State
 void StartS2(void){
     LOG("StartS2 State\r\n");
-    curr_state = OFFENSE;
+    //curr_state = OFFENSE;
 }
 
 //-----------------Offense State
 void Offense(void){
-    LOG("Offense State\r\n");
-    curr_state = DEFENSE;
+    //LOG("Offense State\r\n");
+    //curr_state = DEFENSE;
 }
 
 //-----------------Defense State
@@ -171,4 +189,39 @@ int msg_starts_with(const char* str, const char* prefix){
 
 void parse_message(char *msg){
     LOG("%s\n", msg);
+}
+
+void place_boat(uint8_t* board, uint8_t row, uint8_t col, uint8_t size, uint8_t direction){
+    if(row > 9 || col > 9 || size > 5 || direction > 1){    //-----------------Check if the input is valid (0-9, 0-9, 1-5, 0-1)
+        return;
+    }
+    if(direction == 0){                                     //-----------------If direction is 0, place the boat horizontally	
+        for(uint8_t i = 0; i < size; i++){
+            board[row*10 + col + i] = size;
+        }
+    }else{                                                  //-----------------If direction is 1, place the boat vertically
+        for(uint8_t i = 0; i < size; i++){
+            board[(row + i)*10 + col] = size;
+        }
+    }
+}
+
+void calculate_checksum(uint8_t* board, char* checksum){
+    checksum[0] = 'C';
+    checksum[1] = 'S';
+
+    for (size_t i = 2; i < 12; i++)
+    {
+        checksum[i] = '0';
+    }
+    
+    for(uint8_t col = 0; col < 10; col++){
+        for(uint8_t row = 0; row < 10; row++){
+            if (board[row*10 + col] != 0){
+                checksum[col+2] += 1;
+            }
+        }
+    }
+    checksum[11] = '\n';
+    checksum[12] = '\0';
 }
