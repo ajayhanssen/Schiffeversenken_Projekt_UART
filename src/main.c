@@ -389,7 +389,6 @@ void Defense(void){
             rx_index = 0;
         }else if (rx_index < BUFFERSIZE - 1){
             rx_buffer[rx_index++] = received_char;
-            //LOG("rec:%c\n", received_char);
         }        
     }
 }
@@ -470,16 +469,14 @@ int check_win_or_loss(void){                            //------------------Chec
     }
 }
 
-void LOG_Board_message(void){
-    char curr_msg[15];
-    curr_msg[0] = 'S';
-    curr_msg[1] = 'F';
+void LOG_Board_messages(void){
     for (int col = 0; col < 10; col++){
-        curr_msg[2] = (char)col;
+        
+        char curr_msg[] = {'S', 'F', '0', 'D', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '\n', '\0'};
+        curr_msg[2] += col;
         for (int row = 0; row < 10; row++){
-            curr_msg[row+3] = sprintf("%d", myboard[row*10 + col]);
+            curr_msg[row+4] += myboard[row*10 + col];
         }
-        curr_msg[14] = '\n';
         LOG("%s", curr_msg);
     }
 }
