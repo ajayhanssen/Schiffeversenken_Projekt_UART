@@ -1,6 +1,8 @@
 #include <stm32f0xx.h>
 #include "mci_clock.h"
 #include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 #include "gpio.h"
 #include "parsing.h"
 
@@ -115,6 +117,8 @@ int main(void){
     EPL_SystemClock_Config();
     UART_config();
 
+    srand(time(0));
+
     // Enable the GPIOC peripheral clock
     RCC->AHBENR |= RCC_AHBENR_GPIOCEN;
     blue_button_config();
@@ -143,7 +147,7 @@ void Idle(void){
     if(USART2->ISR & USART_ISR_RXNE){
         
         char received_char = USART2->RDR;
-        if(received_char == 'x'){                          //---------?--------If too much time has passed, CHEATER-State?
+        if(received_char == '\n'){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';
 
             if(msg_starts_with(rx_buffer, "START")){
@@ -172,7 +176,7 @@ void StartS1(void){
     if(USART2->ISR & USART_ISR_RXNE){
         
         char received_char = USART2->RDR;
-        if(received_char == 'x'){                          //---------?--------If too much time has passed, CHEATER-State?
+        if(received_char == '\n'){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';
 
             if(msg_starts_with(rx_buffer, "CS")){
@@ -201,10 +205,10 @@ void StartS1_send_CS(void){
     place_boat(myboard, 7, 2, 2, 0);
     place_boat(myboard, 6, 0, 2, 0);
 
-    char own_checksum[13];                            //------------------Init checksum
+    char own_checksum[14];                            //------------------Init checksum
     calculate_checksum(myboard, own_checksum);              //------------------Calculate own checksum
-
     LOG("%s", own_checksum);                             //------------------Send own checksum
+
     curr_state = STARTS1_WAIT_START;                     //------------------Change the state, wait for Start_msg from S2
 }
 
@@ -212,7 +216,7 @@ void StartS1_wait_Start(void){
     if(USART2->ISR & USART_ISR_RXNE){
         //LOG("in S1 wait start");
         char received_char = USART2->RDR;
-        if(received_char == 'x'){                          //---------?--------If too much time has passed, CHEATER-State?
+        if(received_char == '\n'){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';            
 
             if(msg_starts_with(rx_buffer, "START")){
@@ -258,7 +262,7 @@ void StartS2_wait_CS(void){
     if(USART2->ISR & USART_ISR_RXNE){
         
         char received_char = USART2->RDR;
-        if(received_char == 'x'){                          //---------?--------If too much time has passed, CHEATER-State?
+        if(received_char == '\n'){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';
 
             if(msg_starts_with(rx_buffer, "CS")){
@@ -320,7 +324,7 @@ void Offense_wait(void){
     if(USART2->ISR & USART_ISR_RXNE){
         
         char received_char = USART2->RDR;
-        if(received_char == 'x'){                          //---------?--------If too much time has passed, CHEATER-State?
+        if(received_char == '\n'){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';
 
             if(rx_buffer[0] == 'T'){
@@ -356,7 +360,7 @@ void Defense(void){
     if(USART2->ISR & USART_ISR_RXNE){
         
         char received_char = USART2->RDR;
-        if(received_char == 'x'){                          //---------?--------If too much time has passed, CHEATER-State?
+        if(received_char == '\n'){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';
 
             if(msg_starts_with(rx_buffer, "BOOM")){
@@ -395,9 +399,13 @@ void Defense(void){
 
 void GameEndWon(void){
     //LOG("GameEnd State\r\n");
+    LOG_Board_messages();
+    curr_state = IDLE;
 }
 void GameEndLost(void){
     //LOG("GameEndLost State\r\n");
+    LOG_Board_messages();
+    curr_state = IDLE;
 }
 
 //-----------------End of Statemachine functions-----------------
@@ -479,4 +487,115 @@ void LOG_Board_messages(void){
         }
         LOG("%s", curr_msg);
     }
+}
+
+int is_valid_position(int col, int row, int direction, int size) {
+    //---------------check if the boat ends p being out of bounds when placed, depending on location, orientation and size
+    //---------------return 1 if planned location is ok, return 0 if not
+    if (direction == 0) {
+        if (col + size > 9) {
+            return 0;
+        }
+    }
+    else if (direction == 1) {
+        if (row + size > 9) {
+            return 0;
+        }
+    }
+    else {
+        return 1;
+    }
+}
+
+int is_not_reserved(int col, int row, int direction, int size, uint8_t* res_slots) {
+    //---------------check if planned placing spot is already reserved by other boats (leaving one field of space between)
+    //---------------return 1 if planned location is ok, return 0 if it is already reserved
+    if (direction == 0) {
+        for (int i = 0; i < size; i++) {
+            if (res_slots[row * 10 + col + i] == 1) {
+                return 0;
+            }
+        }
+    }
+    else if (direction == 1) {
+        for (int i = 0; i < size; i++) {
+            if (res_slots[(row + i) * 10 + col] == 1) {
+                return 0;
+            }
+        }
+    }
+    else {
+        return 1;
+    }
+}
+
+void place_boat_and_reserve(int col, int row, int direction, int size, uint8_t* res_slots, uint8_t* board) {
+    //---------------called after checking location and reservations, places boat and reserves space 1 tile around it
+    if (direction == 0) {
+        for (int i = 0; i < size; i++) {
+            board[row * 10 + col + i] = size;
+            //res_slots[row*10 + col + i] = 1;
+
+            for (int c = col - 1; c <= col + size; c++) {
+                for (int r = row - 1; r <= row + 1; r++) {
+                    if (c >= 0 && c < 10 && r >= 0 && r < 10) {
+                        res_slots[r * 10 + c] = 1;
+                    }
+                }
+            }
+        }
+    }
+    else if (direction == 1) {
+        for (int i = 0; i < size; i++) {
+            board[(row + i) * 10 + col] = size;
+            //res_slots[(row + i)*10 + col] = 1;
+
+            for (int c = col - 1; c <= col + 1; c++) {
+                for (int r = row - 1; r <= row + size; r++) {
+                    if (c >= 0 && c < 10 && r >= 0 && r < 10) {
+                        res_slots[r * 10 + c] = 1;
+                    }
+                }
+            }
+        }
+    }
+
+}
+void place_boats_randomly(uint8_t* board) {
+    //---------------randomly place boats on the board, leaving one tile of space between them
+    uint8_t res_fields[10 * 10] = { 0 };                                    //------------------array containing reservations
+    uint8_t boat_sizes[] = { 5, 4, 4, 3, 3, 3, 2, 2, 2, 2 };                //------------------array of the boats needed to be placed
+    int array_size = sizeof(boat_sizes) / sizeof(boat_sizes[0]);            //------------------calcing size of the array
+
+    for (int boat = 0; boat < array_size; boat++) {
+        while (1) {
+            uint8_t row = rand() % 10;                                      //------------------generate random numbers for location and rotation
+            uint8_t col = rand() % 10;
+            uint8_t direction = rand() % 2;
+
+            //------------------check if position is valid and if not in reserved spots
+            if (is_valid_position(col, row, direction, boat_sizes[boat]) && is_not_reserved(col, row, direction, boat_sizes[boat], res_fields)) {
+                place_boat_and_reserve(col, row, direction, boat_sizes[boat], res_fields, board); //------------------place the boat and reserve tiles around it
+                break;
+            }
+        }
+    }
+
+#ifdef DEBUG_LVL_PRINT
+    for (int col = 0; col < 10; col++) {
+        for (int row = 0; row < 10; row++) {
+            if (board[row * 10 + col] == 0) {
+                printf("_");
+            }
+            else {
+                printf("%d", board[row * 10 + col]);
+            }
+            
+            if (row == 9) {
+                printf("\n");
+            }
+        }
+    }
+#endif
+
 }
