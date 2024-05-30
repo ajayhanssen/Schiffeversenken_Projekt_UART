@@ -105,11 +105,14 @@ static uint8_t enemyboard[10*10] = {0};                        //---------------
 static uint8_t hits_on_me[10*10] = {0};                        //------------------Init hits on me (Reihe*10 + Spalte (0-9!!!))
 
 static uint8_t enemycs[10] = {0};                              //------------------Init enemy checksum array
+static uint8_t shoot_weights[10] = {0};                              //------------------Init weights for shooting logic array
 
 typedef struct{
     uint8_t row;
     uint8_t col;
 }Shot;
+
+Shot find_next_shot(uint8_t* enemyboard);
 
 static Shot last_shot = {0, 0};
 
@@ -150,24 +153,15 @@ void initializeSM(void){
 //-----------------Idle State
 void Idle(void){
     // If correct Start-Message is received, my yConti becomes S2
-    if(USART2->ISR & USART_ISR_RXNE){
-        
-        char received_char = USART2->RDR;
-        if(received_char == st_ch){                          //---------?--------If too much time has passed, CHEATER-State?
-            rx_buffer[rx_index] = '\0';
+    // If correct Start-Message is received, my yConti becomes S2
+    int msg_status = receive_msg_with_certain_prefix("START"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
-            if(msg_starts_with(rx_buffer, "START")){
-                //parse_message(rx_buffer);
-                curr_state = STARTS2;                       //-----------------Change the state, yConti becomes S2
-            }else{
-                LOG("Invalid Message\n");                   //---------?--------Invalid message, maybe CHEATER-State?
-            }
-            rx_index = 0;
-        }else if (rx_index < BUFFERSIZE - 1){
-            rx_buffer[rx_index++] = received_char;
-        }        
+    if(msg_status == 1){
+        curr_state = STARTS2;
+    }else if(msg_status == 2){
+        LOG("Invalid Message\n");
     }
-    
+
     // If the blue button is pressed, my yConti becomes S1
     if(!(GPIOC->IDR & GPIO_IDR_13)){
         LOG("START52216067\n")
@@ -179,26 +173,18 @@ void Idle(void){
 void StartS1(void){
     //PARSE CS Player 2                                         //---------?--------Implement Player 2 Checksum parsing
     
-    if(USART2->ISR & USART_ISR_RXNE){
-        
-        char received_char = USART2->RDR;
-        if(received_char == st_ch){                          //---------?--------If too much time has passed, CHEATER-State?
-            rx_buffer[rx_index] = '\0';
+    int msg_status = receive_msg_with_certain_prefix("CS"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
-            if(msg_starts_with(rx_buffer, "CS")){
-                for (int i = 0; i < 10; i++){
-                    enemycs[i] = rx_buffer[i+2] - '0';    //------------------Save the checksum of the enemy
-                }
-                curr_state = STARTS1_SEND_CS;                           //-----------------Change the checksum received flag
-            }else{
-                LOG("Invalid Message\n");                   //---------?--------Invalid message, maybe CHEATER-State?
-            }
-            rx_index = 0;
-        }else if (rx_index < BUFFERSIZE - 1){
-            rx_buffer[rx_index++] = received_char;
-        }        
+    if(msg_status == 1){
+        for (int i = 0; i < 10; i++){
+            enemycs[i] = rx_buffer[i+2] - '0';    //------------------Save the checksum of the enemy
+            shoot_weights[i] = enemycs[i];
+        }
+        curr_state = STARTS1_SEND_CS;                           //-----------------Change the checksum received flag    
+    }else if(msg_status == 2){
+        LOG("Invalid Message\n");
     }
-    
+
 }
 
 void StartS1_send_CS(void){
@@ -221,27 +207,18 @@ void StartS1_send_CS(void){
 }
 
 void StartS1_wait_Start(void){
-    if(USART2->ISR & USART_ISR_RXNE){
-        //LOG("in S1 wait start");
-        char received_char = USART2->RDR;
-        if(received_char == st_ch){                          //---------?--------If too much time has passed, CHEATER-State?
-            rx_buffer[rx_index] = '\0';            
+    
+    int msg_status = receive_msg_with_certain_prefix("START"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
-            if(msg_starts_with(rx_buffer, "START")){
-                //parse_message(rx_buffer);
-                curr_state = OFFENSE_SHOOT;                       //-----------------Change the state, going to Offense
+    if(msg_status == 1){
+        //parse_message(rx_buffer);
+        curr_state = OFFENSE_SHOOT;                       //-----------------Change the state, going to Offense
 
-                #ifdef DEBUG
-                //LOG("successfully read Startmsg");
-                #endif
-
-            }else{
-                LOG("Invalid Message\n");                   //---------?--------Invalid message, maybe CHEATER-State?
-            }
-            rx_index = 0;
-        }else if (rx_index < BUFFERSIZE - 1){
-            rx_buffer[rx_index++] = received_char;
-        }
+        #ifdef DEBUG
+        //LOG("successfully read Startmsg");
+        #endif
+    }else if(msg_status == 2){
+        LOG("Invalid Message\n");
     }
 }
 
@@ -267,24 +244,17 @@ void StartS2(void){
 }
 
 void StartS2_wait_CS(void){
-    if(USART2->ISR & USART_ISR_RXNE){
-        
-        char received_char = USART2->RDR;
-        if(received_char == st_ch){                          //---------?--------If too much time has passed, CHEATER-State?
-            rx_buffer[rx_index] = '\0';
+    
+    int msg_status = receive_msg_with_certain_prefix("CS"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
-            if(msg_starts_with(rx_buffer, "CS")){
-                for (int i = 0; i < 10; i++){
-                    enemycs[i] = rx_buffer[i+2] - '0';    //------------------Save the checksum of the enemy
-                }
-                curr_state = STARTS2_SEND_START;                           //-----------------Change the checksum received flag
-            }else{
-                LOG("Invalid Message\n");                   //---------?--------Invalid message, maybe CHEATER-State?
-            }
-            rx_index = 0;
-        }else if (rx_index < BUFFERSIZE - 1){
-            rx_buffer[rx_index++] = received_char;
-        }        
+    if(msg_status == 1){
+        for (int i = 0; i < 10; i++){
+            enemycs[i] = rx_buffer[i+2] - '0';    //------------------Save the checksum of the enemy
+            shoot_weights[i] = enemycs[i];
+        }
+        curr_state = STARTS2_SEND_START;                           //-----------------Change the checksum received flag
+    }else if(msg_status == 2){
+        LOG("Invalid Message\n");
     }
 }
 
@@ -305,26 +275,18 @@ void Offense_shoot(void){
     #endif
 
     char shoot_msg[8] = {'B', 'O', 'O', 'M', '0', '0', '\n', '\0'};
-    int shot_already = 0;
-    for (int row = 0; row < 10; row++){
-        if (shot_already == 1){ break; }
+    
+    Shot next_shot = find_next_shot(enemyboard);
 
-        for (int col = 0; col < 10; col++){
-            if (shot_already == 1){ break; }
+    shoot_msg[4] = '0' + next_shot.col;
+    shoot_msg[5] = '0' + next_shot.row;
+    LOG("%s", shoot_msg);
 
-            if(enemyboard[row*10 + col] == 0){
-                shoot_msg[4] = '0' + col;
-                shoot_msg[5] = '0' + row;
-                LOG("%s", shoot_msg);
-                enemyboard[row*10 + col] = 1;
-                last_shot.row = row;                 //------------------Save last shot row
-                last_shot.col = col;                 //------------------Save last shot col
-                shot_already = 1;
-                curr_state = OFFENSE_WAIT;            //------------------Change the state, going to waiting for response
-            }
-        }
-    }
-    shot_already = 0;
+    enemyboard[next_shot.row*10 + next_shot.col] = 1;
+    last_shot = next_shot;
+    curr_state = OFFENSE_WAIT;            //------------------Change the state, going to waiting for response
+        
+        
 }
 
 void Offense_wait(void){
@@ -367,43 +329,33 @@ void Offense_wait(void){
 //-----------------Defense State
 void Defense(void){
     
-    if(USART2->ISR & USART_ISR_RXNE){
-        
-        char received_char = USART2->RDR;
-        if(received_char == st_ch){                          //---------?--------If too much time has passed, CHEATER-State?
-            rx_buffer[rx_index] = '\0';
+    int msg_status = receive_msg_with_certain_prefix("BOOM"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
-            if(msg_starts_with(rx_buffer, "BOOM")){
-                //parse_message(rx_buffer);                   //---------?--------Message back to Origin, remove later on!!!
-                int shot_received_col = rx_buffer[4] - '0';  //------------------Get the row of the shot
-                int shot_received_row = rx_buffer[5] - '0';  //------------------Get the col of the shot
-                if(myboard[shot_received_row*10 + shot_received_col] != 0){
-                    LOG("T\n");                             //------------------If hit, send T
-                    hits_on_me[shot_received_row*10 + shot_received_col] = 1;    //------------------If hit, mark the hits_on_me board
-                }else{
-                    LOG("W\n");                             //------------------If miss, send M
-                }
-                #ifdef DEBUG_LVL_1
-                LOG("i received a shot\n");
-                #endif
-                if (check_win_or_loss() == 2){
-                    curr_state = GAMEENDLOST;
-                    #ifdef DEBUG_LVL_1
-                    LOG("I thought i won\n");
-                    #endif
-                }else{
-                    curr_state = OFFENSE_SHOOT;
-                    #ifdef DEBUG_LVL_1
-                    LOG("now transitioning to shooting mode\n");
-                    #endif
-                }
-            }else{
-                LOG("Invalid Message\n");                   //---------?--------Invalid message, maybe CHEATER-State?
-            }
-            rx_index = 0;
-        }else if (rx_index < BUFFERSIZE - 1){
-            rx_buffer[rx_index++] = received_char;
-        }        
+    if(msg_status == 1){
+        int shot_received_col = rx_buffer[4] - '0';  //------------------Get the row of the shot
+        int shot_received_row = rx_buffer[5] - '0';  //------------------Get the col of the shot
+        if(myboard[shot_received_row*10 + shot_received_col] != 0){
+            LOG("T\n");                             //------------------If hit, send T
+            hits_on_me[shot_received_row*10 + shot_received_col] = 1;    //------------------If hit, mark the hits_on_me board
+        }else{
+            LOG("W\n");                             //------------------If miss, send M
+        }
+        #ifdef DEBUG_LVL_1
+        LOG("i received a shot\n");
+        #endif
+        if (check_win_or_loss() == 2){
+            curr_state = GAMEENDLOST;
+            #ifdef DEBUG_LVL_1
+            LOG("I thought i won\n");
+            #endif
+        }else{
+            curr_state = OFFENSE_SHOOT;
+            #ifdef DEBUG_LVL_1
+            LOG("now transitioning to shooting mode\n");
+            #endif
+        }
+    }else if(msg_status == 2){
+        LOG("Invalid Message\n");
     }
 }
 
@@ -427,6 +379,27 @@ int msg_starts_with(const char* str, const char* prefix){
 
 void parse_message(char *msg){
     LOG("%s\n", msg);
+}
+
+int receive_msg_with_certain_prefix(const char* prefix){ //----0 if not received, 1 if received, 2 if invalid message
+    if(USART2->ISR & USART_ISR_RXNE){
+        
+        char received_char = USART2->RDR;
+        if(received_char == st_ch){                          //---------?--------If too much time has passed, CHEATER-State?
+            rx_buffer[rx_index] = '\0';
+
+            if(msg_starts_with(rx_buffer, prefix)){
+                rx_index = 0;
+                return 1;
+            }else{
+                rx_index = 0;
+                return 2;                   //---------?--------Invalid message, maybe CHEATER-State?
+            }
+        }else if (rx_index < BUFFERSIZE - 1){
+            rx_buffer[rx_index++] = received_char;
+        }        
+    }
+    return 0;
 }
 
 void place_boat(uint8_t* board, uint8_t row, uint8_t col, uint8_t size, uint8_t direction){
@@ -592,7 +565,7 @@ void place_boats_randomly(uint8_t* board) {
     }
 }
 
-Shot find_next_shot(int* enemyboard){
+Shot find_next_shot(uint8_t* enemyboard){
     for (int col = 0; col < 10; col++){
         for (int row = 0; row < 10; row++){
 
@@ -610,12 +583,27 @@ Shot find_next_shot(int* enemyboard){
             }
         }
     }
-    //------------------If no hit was found, shoot randomly
+    //------------------If no hit was found, shoot with weighted randomness-------------------//
+
+    //------calculate the total weight of the enemy board through checksum
+    int chosen_col = 0;
+    for (int i = 0; i < 10; i++){
+        if (shoot_weights[i] > shoot_weights[chosen_col]){
+            chosen_col = i;
+        }
+    }
+
     while(1){
-        uint8_t randcol = rand() % 10;
         uint8_t randrow = rand() % 10;
-        if (enemyboard[randrow*10 + randcol] == 0){
-            return (Shot){randrow, randcol};
+        if (enemyboard[randrow*10 + chosen_col] == 0){
+            shoot_weights[chosen_col] -= 1;
+            return (Shot){randrow, chosen_col};
         }
     }
 }
+
+//is_enemy_cs_30()
+
+//do_cs_and_hits_match()
+
+//has_enemy_cs_10_digits
