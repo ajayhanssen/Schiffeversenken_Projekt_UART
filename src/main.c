@@ -12,6 +12,7 @@
 //#define DEBUG_LVL_3
 #define DEBUG_LVL_4
 #define DEBUG_LVL_5
+#define DEBUG_HTERM
 
 // This is a simple macro to print debug messages of DEBUG is defined
 #ifdef DEBUG
@@ -103,14 +104,20 @@ static uint8_t myboard[10*10] = {0};                           //---------------
 static uint8_t enemyboard[10*10] = {0};                        //------------------Init enemy board (Reihe*10 + Spalte (0-9!!!))
 static uint8_t hits_on_me[10*10] = {0};                        //------------------Init hits on me (Reihe*10 + Spalte (0-9!!!))
 
+static uint8_t enemycs[10] = {0};                              //------------------Init enemy checksum array
+
 typedef struct{
     uint8_t row;
     uint8_t col;
 }Shot;
 
 static Shot last_shot = {0, 0};
-//static Shot hits_on_enemy[30];
 
+#ifdef DEBUG_HTERM
+char st_ch = 'x';
+#else
+char st_ch = '\n';
+#endif
 
 int main(void){
     // Configure the system clock to 48MHz
@@ -123,7 +130,6 @@ int main(void){
     RCC->AHBENR |= RCC_AHBENR_GPIOCEN;
     blue_button_config();
     GPIO_OUTPUT_CONFIG(GPIOA, 5);
-
 
     initializeSM();
 
@@ -147,7 +153,7 @@ void Idle(void){
     if(USART2->ISR & USART_ISR_RXNE){
         
         char received_char = USART2->RDR;
-        if(received_char == '\n'){                          //---------?--------If too much time has passed, CHEATER-State?
+        if(received_char == st_ch){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';
 
             if(msg_starts_with(rx_buffer, "START")){
@@ -176,11 +182,13 @@ void StartS1(void){
     if(USART2->ISR & USART_ISR_RXNE){
         
         char received_char = USART2->RDR;
-        if(received_char == '\n'){                          //---------?--------If too much time has passed, CHEATER-State?
+        if(received_char == st_ch){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';
 
             if(msg_starts_with(rx_buffer, "CS")){
-                //parse_message(rx_buffer);                   //---------?--------Message back to Origin, remove later on!!!  
+                for (int i = 0; i < 10; i++){
+                    enemycs[i] = rx_buffer[i+2] - '0';    //------------------Save the checksum of the enemy
+                }
                 curr_state = STARTS1_SEND_CS;                           //-----------------Change the checksum received flag
             }else{
                 LOG("Invalid Message\n");                   //---------?--------Invalid message, maybe CHEATER-State?
@@ -216,7 +224,7 @@ void StartS1_wait_Start(void){
     if(USART2->ISR & USART_ISR_RXNE){
         //LOG("in S1 wait start");
         char received_char = USART2->RDR;
-        if(received_char == '\n'){                          //---------?--------If too much time has passed, CHEATER-State?
+        if(received_char == st_ch){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';            
 
             if(msg_starts_with(rx_buffer, "START")){
@@ -233,7 +241,7 @@ void StartS1_wait_Start(void){
             rx_index = 0;
         }else if (rx_index < BUFFERSIZE - 1){
             rx_buffer[rx_index++] = received_char;
-        }        
+        }
     }
 }
 
@@ -262,11 +270,13 @@ void StartS2_wait_CS(void){
     if(USART2->ISR & USART_ISR_RXNE){
         
         char received_char = USART2->RDR;
-        if(received_char == '\n'){                          //---------?--------If too much time has passed, CHEATER-State?
+        if(received_char == st_ch){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';
 
             if(msg_starts_with(rx_buffer, "CS")){
-                //parse_message(rx_buffer);                   //---------?--------Message back to Origin, remove later on!!!
+                for (int i = 0; i < 10; i++){
+                    enemycs[i] = rx_buffer[i+2] - '0';    //------------------Save the checksum of the enemy
+                }
                 curr_state = STARTS2_SEND_START;                           //-----------------Change the checksum received flag
             }else{
                 LOG("Invalid Message\n");                   //---------?--------Invalid message, maybe CHEATER-State?
@@ -294,7 +304,7 @@ void Offense_shoot(void){
     LOG("in Offense_shoot\n");
     #endif
 
-    char shoot_msg[7] = {'B', 'O', 'O', 'M', '0', '0', '\n'};
+    char shoot_msg[8] = {'B', 'O', 'O', 'M', '0', '0', '\n', '\0'};
     int shot_already = 0;
     for (int row = 0; row < 10; row++){
         if (shot_already == 1){ break; }
@@ -324,7 +334,7 @@ void Offense_wait(void){
     if(USART2->ISR & USART_ISR_RXNE){
         
         char received_char = USART2->RDR;
-        if(received_char == '\n'){                          //---------?--------If too much time has passed, CHEATER-State?
+        if(received_char == st_ch){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';
 
             if(rx_buffer[0] == 'T'){
@@ -360,13 +370,13 @@ void Defense(void){
     if(USART2->ISR & USART_ISR_RXNE){
         
         char received_char = USART2->RDR;
-        if(received_char == '\n'){                          //---------?--------If too much time has passed, CHEATER-State?
+        if(received_char == st_ch){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';
 
             if(msg_starts_with(rx_buffer, "BOOM")){
                 //parse_message(rx_buffer);                   //---------?--------Message back to Origin, remove later on!!!
-                int shot_received_row = rx_buffer[4] - '0';  //------------------Get the row of the shot
-                int shot_received_col = rx_buffer[5] - '0';  //------------------Get the col of the shot
+                int shot_received_col = rx_buffer[4] - '0';  //------------------Get the row of the shot
+                int shot_received_row = rx_buffer[5] - '0';  //------------------Get the col of the shot
                 if(myboard[shot_received_row*10 + shot_received_col] != 0){
                     LOG("T\n");                             //------------------If hit, send T
                     hits_on_me[shot_received_row*10 + shot_received_col] = 1;    //------------------If hit, mark the hits_on_me board
@@ -580,22 +590,32 @@ void place_boats_randomly(uint8_t* board) {
             }
         }
     }
+}
 
-#ifdef DEBUG_LVL_PRINT
-    for (int col = 0; col < 10; col++) {
-        for (int row = 0; row < 10; row++) {
-            if (board[row * 10 + col] == 0) {
-                printf("_");
-            }
-            else {
-                printf("%d", board[row * 10 + col]);
-            }
-            
-            if (row == 9) {
-                printf("\n");
+Shot find_next_shot(int* enemyboard){
+    for (int col = 0; col < 10; col++){
+        for (int row = 0; row < 10; row++){
+
+            if(enemyboard[row*10 + col] == 2){
+                //------check to the right, left, down and up if there is a hit
+                if (col + 1 < 10 && enemyboard[row*10 + col + 1] == 0){
+                    return (Shot){row, col + 1};
+                }else if (col - 1 >= 0 && enemyboard[row*10 + col - 1] == 0){
+                    return (Shot){row, col - 1};
+                }else if (row + 1 < 10 && enemyboard[(row + 1)*10 + col] == 0){
+                    return (Shot){row + 1, col};
+                }else if (row - 1 >= 0 && enemyboard[(row - 1)*10 + col] == 0){
+                    return (Shot){row - 1, col};
+                }
             }
         }
     }
-#endif
-
+    //------------------If no hit was found, shoot randomly
+    while(1){
+        uint8_t randcol = rand() % 10;
+        uint8_t randrow = rand() % 10;
+        if (enemyboard[randrow*10 + randcol] == 0){
+            return (Shot){randrow, randcol};
+        }
+    }
 }
