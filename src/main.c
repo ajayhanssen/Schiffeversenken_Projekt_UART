@@ -13,10 +13,11 @@
 //#define DEBUG_LVL_4
 //#define DEBUG_LVL_5
 //#define DEBUG_NO_WIN_LOOSE
-#define DEBUG_HTERM
-#define DEBUG_ENDGAME
+//#define DEBUG_HTERM
+//#define DEBUG_ENDGAME
+//#define DEBUG_SET_LAYOUT
 
-// This is a simple macro to print debug messages of DEBUG is defined
+// This is a simple macro to print debug messages if DEBUG is defined
 #ifdef DEBUG
   #define LOG( msg... ) printf( msg );
 #else
@@ -107,6 +108,8 @@ static State_Type curr_state; /* The "current state" */
 static uint8_t seed = 0;
 static uint8_t player1 = 0; // 1 for player one, zero for player two
 static uint8_t gamestatus = 0; // 1 for game won, 2 for game lost, 3 for protocol error
+static uint8_t gameiterations = 0; // counting the number of game iterations
+
 static char rx_buffer[BUFFERSIZE];
 static uint8_t rx_index = 0;
 
@@ -127,6 +130,7 @@ typedef struct{
 
 Shot find_next_shot(uint8_t* enemyboard);
 Shot find_next_shot_dumb(uint8_t* enemyboard);
+uint8_t are_adjacent_hits(uint8_t* enemyboard, uint8_t row, uint8_t col);
 
 static Shot last_shot = {0, 0};
 
@@ -193,7 +197,7 @@ void Idle(void){
 
 //-----------------StartS1 State
 void StartS1(void){
-    //PARSE CS Player 2                                         //---------?--------Implement Player 2 Checksum parsing
+
     player1 = 1;
     int msg_status = receive_msg_with_certain_prefix("CS"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
@@ -210,8 +214,11 @@ void StartS1(void){
 }
 
 void StartS1_send_CS(void){
+    #ifdef DEBUG_SET_LAYOUT
+    place_boats_standard(myboard);
+    #else
     place_boats_randomly(myboard);                        //------------------Place my boats randomly
-    //place_boats_standard(myboard);
+    #endif
 
     char own_checksum[14];                            //------------------Init checksum
     calculate_checksum(myboard, own_checksum);              //------------------Calculate own checksum
@@ -239,7 +246,12 @@ void StartS1_wait_Start(void){
 
 //-----------------StartS2 State
 void StartS2(void){
+    player1 = 0;
+    #ifdef DEBUG_SET_LAYOUT
+    place_boats_standard(myboard);
+    #else
     place_boats_randomly(myboard);                        //------------------Place my boats randomly
+    #endif
 
     char own_checksum[14];                                  //------------------Init checksum
     calculate_checksum(myboard, own_checksum);              //------------------Calculate own checksum
@@ -276,6 +288,8 @@ void Offense_shoot(void){
     #ifdef DEBUG_LVL_2
     LOG("in Offense_shoot\n");
     #endif
+
+    gameiterations++;
 
     char shoot_msg[8] = {'B', 'O', 'O', 'M', '0', '0', '\n', '\0'};
     
@@ -335,6 +349,8 @@ void Offense_wait(void){
 //-----------------Defense State
 void Defense(void){
     
+    gameiterations++;
+
     int msg_status = receive_msg_with_certain_prefix("BOOM"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
     if(msg_status == 1){
@@ -352,8 +368,8 @@ void Defense(void){
         if (check_win_or_loss() == 2){
             gamestatus = 2;
             curr_state = GAMEEND;
-            #ifdef DEBUG_LVL_1
-            LOG("I thought i won\n");
+            #ifdef DEBUG_HTERM
+            LOG("I won\n");
             #endif
         }else{
             curr_state = OFFENSE_SHOOT;
@@ -371,12 +387,18 @@ void Send_SF(void){
 
     if(player1 == 1){
         curr_state = WAIT_SF;
+
+        #ifdef DEBUG_HTERM
+        LOG("now waiting for checksum\n");
+        #endif
+
     }else{
         curr_state = PROTOCOLERROR;
     }
 }
 
 void Wait_SF(void){
+
     if(field_msgs_count < 10){
         int msg_status = receive_msg_with_certain_prefix("SF"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
@@ -392,19 +414,30 @@ void Wait_SF(void){
             curr_state = PROTOCOLERROR;
         }else{
             curr_state = SEND_SF;
+
+            #ifdef DEBUG_HTERM
+            LOG("finished receiving checksum\n");
+            #endif
+
         }
     }
 }
 
+void ProtocolError(void){
+    LOG("finished\n");
+}
 
 void GameEnd(void){
+
+    #ifdef DEBUG_HTERM
+    if(player1 == 1){LOG("Game ended, i am player 1\n")}else{LOG("Game ended, i am player 2\n")}
+    #endif
+
     if(player1 == 1){ curr_state = SEND_SF; }
     else{ curr_state = WAIT_SF; }
     
 }
-void ProtocolError(void){
-    LOG('finished\n');
-}
+
 
 //-----------------End of Statemachine functions-----------------
 
@@ -516,6 +549,9 @@ void LOG_Board_messages(void){
         }
         LOG("%s", curr_msg);
     }
+    #ifdef DEBUG_HTERM
+    LOG("finished sending checksum\n");
+    #endif
 }
 
 uint8_t is_valid_position(uint8_t col, uint8_t row, uint8_t direction, uint8_t size) {
@@ -694,20 +730,38 @@ Shot find_next_shot(uint8_t* enemyboard){
     //------------------If no hit was found, shoot with weighted randomness-------------------//
 
     //------calculate the total weight of the enemy board through checksum
-    int chosen_col = 0;
+    uint8_t chosen_col = 0;
     for (int i = 0; i < 10; i++){
         if (shoot_weights[i] > shoot_weights[chosen_col]){
             chosen_col = i;
         }
     }
 
-    while(1){
+    uint16_t tries = 0;
+    while(tries < 500){
         uint8_t randrow = rand() % 10;
         if (enemyboard[randrow*10 + chosen_col] == 0){
-            //shoot_weights[chosen_col] -= 1;
-            return (Shot){randrow, chosen_col};
+            
+            if(are_adjacent_hits(enemyboard, randrow, chosen_col) == 1){ //--------------if there have been hits in adjacent columns, shoot with 1/10 chance
+                if (rand() % 10 == 0){
+                    return (Shot){randrow, chosen_col};
+                }
+            }else{                                                       //--------------if there have not been hits in adjacent columns, shoot there
+                return (Shot){randrow, chosen_col};
+            }
         }
     }
+    return find_next_shot_dumb(enemyboard);                              //--------------if no valid shot was found in 500 tries, shoot next in line
+}
+
+uint8_t are_adjacent_hits(uint8_t* enemyboard, uint8_t row, uint8_t col){
+    if (col + 1 < 10 && enemyboard[row*10 + col + 1] == 2){
+        return 1;
+    }
+    if (col - 1 >= 0 && enemyboard[row*10 + col - 1] == 2){
+        return 1;
+    }
+    return 0;
 }
 
 Shot find_next_shot_dumb(uint8_t* enemyboard){
@@ -734,14 +788,55 @@ int is_enemy_cs_30(int* enemycs){
     }
 }
 
-int do_cs_and_hits_match(int* enemycs, int* enemyboard){
+int do_cs_and_hits_match(int* enemycs, int* enemyboard){ //--------------check if the checksum and the hits on the enemy board match, 1 if yes, 0 if cheater
 
+    for (int col = 0; col < 10; col++) {
+        int colhitsum = 0;
+        int colwatersum = 0;
 
+        for (int row = 0; row < 10; row++) {
+            if (enemyboard[row * 10 + col] == 2) {
+                colhitsum++;
+            } else if (enemyboard[row * 10 + col] == 1) {
+                colwatersum++;
+            }
+        }
+
+        // If the hits exceed the checksum or the water tiles exceed the possible number of water tiles
+        if (colhitsum > enemycs[col] || colwatersum > (10 - enemycs[col])) {
+
+            #ifdef DEBUG_HTERM
+            LOG("Checksum inconsistensies found\n");
+            #endif
+
+            return 0;  //------------Cheating detected, more boat- or more water-hits than checksum suggests
+        }
+    }
+    return 1;  //--------All columns match
 }
 
-//has_enemy_cs_10_digits
+int more_than_100_iterations(void){
+    if (gameiterations > 200){
+        return 1;
+    }else{
+        return 0;
+    }
+}
 
-void reset_game(void){
+int does_board_message_match(uint8_t* field_msgs, uint8_t* enemyboard){
+    for(int col = 0; col < 10; col++){
+        for(int row = 0; row < 10; row++){
+            if (field_msgs[col*10 + row] >= 2 && enemyboard[row*10 + col] == 1){
+                return 0; //-------cheated, marked hit on field message but not on board
+            }else{
+                return 1;
+            }
+        }
+    }
+}
+
+
+void reset_game(void){              //--------------reset all variables to start a new game, not used, just press reset-button
     player1 = 0;
     gamestatus = 0;
     field_msgs_count = 0;
