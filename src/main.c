@@ -10,9 +10,11 @@
 //#define DEBUG_LVL_1
 //#define DEBUG_LVL_2
 //#define DEBUG_LVL_3
-#define DEBUG_LVL_4
-#define DEBUG_LVL_5
+//#define DEBUG_LVL_4
+//#define DEBUG_LVL_5
+//#define DEBUG_NO_WIN_LOOSE
 #define DEBUG_HTERM
+#define DEBUG_ENDGAME
 
 // This is a simple macro to print debug messages of DEBUG is defined
 #ifdef DEBUG
@@ -77,8 +79,11 @@ void Offense_shoot(void);
 void Offense_wait(void);
 
 void Defense(void);
-void GameEndWon(void);
-void GameEndLost(void);
+
+void Send_SF(void);
+void Wait_SF(void);
+void GameEnd(void);
+void ProtocolError(void);
 void initializeSM(void);
 
 typedef enum {IDLE=0, 
@@ -86,17 +91,22 @@ typedef enum {IDLE=0,
                 STARTS2, STARTS2_WAIT_CS, STARTS2_SEND_START,
                 OFFENSE_SHOOT, OFFENSE_WAIT,
                 DEFENSE,
-                GAMEENDLOST, GAMEENDWON} State_Type;
+                SEND_SF, WAIT_SF,
+                GAMEEND, PROTOCOLERROR} State_Type;
 static void (*state_table[])(void)={Idle, 
                                     StartS1, StartS1_send_CS, StartS1_wait_Start,
                                     StartS2, StartS2_wait_CS, StartS2_send_Start,
                                     Offense_shoot, Offense_wait,
                                     Defense,
-                                    GameEndLost, GameEndWon}; // Function pointer array for Statemachine functions
+                                    Send_SF, Wait_SF,
+                                    GameEnd, ProtocolError}; // Function pointer array for Statemachine functions
 
 
 //-----------------Create global variables
 static State_Type curr_state; /* The "current state" */
+static uint8_t seed = 0;
+static uint8_t player1 = 0; // 1 for player one, zero for player two
+static uint8_t gamestatus = 0; // 1 for game won, 2 for game lost, 3 for protocol error
 static char rx_buffer[BUFFERSIZE];
 static uint8_t rx_index = 0;
 
@@ -107,12 +117,16 @@ static uint8_t hits_on_me[10*10] = {0};                        //---------------
 static uint8_t enemycs[10] = {0};                              //------------------Init enemy checksum array
 static uint8_t shoot_weights[10] = {0};                              //------------------Init weights for shooting logic array
 
+static uint8_t field_msgs[10*10] = {0};                        //------------------Init array for holding enemy field message
+static uint8_t field_msgs_count = 0;
+
 typedef struct{
     uint8_t row;
     uint8_t col;
 }Shot;
 
 Shot find_next_shot(uint8_t* enemyboard);
+Shot find_next_shot_dumb(uint8_t* enemyboard);
 
 static Shot last_shot = {0, 0};
 
@@ -127,8 +141,6 @@ int main(void){
     EPL_SystemClock_Config();
     UART_config();
 
-    srand(time(0));
-
     // Enable the GPIOC peripheral clock
     RCC->AHBENR |= RCC_AHBENR_GPIOCEN;
     blue_button_config();
@@ -139,7 +151,7 @@ int main(void){
     for(;;){
     
         state_table[curr_state]();
-    
+
     }   
 }
 
@@ -153,11 +165,14 @@ void initializeSM(void){
 //-----------------Idle State
 void Idle(void){
     // If correct Start-Message is received, my yConti becomes S2
-    // If correct Start-Message is received, my yConti becomes S2
+    //reset_game();
+
+
     int msg_status = receive_msg_with_certain_prefix("START"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
     if(msg_status == 1){
         curr_state = STARTS2;
+        srand(seed);
     }else if(msg_status == 2){
         LOG("Invalid Message\n");
     }
@@ -165,14 +180,21 @@ void Idle(void){
     // If the blue button is pressed, my yConti becomes S1
     if(!(GPIOC->IDR & GPIO_IDR_13)){
         LOG("START52216067\n")
+        srand(seed);
         curr_state = STARTS1;
+    }
+
+    if (seed < 250){                                    //------------------Seed for randomness, increased until moving to the next state
+        seed++;
+    }else{
+        seed = 0;
     }
 }
 
 //-----------------StartS1 State
 void StartS1(void){
     //PARSE CS Player 2                                         //---------?--------Implement Player 2 Checksum parsing
-    
+    player1 = 1;
     int msg_status = receive_msg_with_certain_prefix("CS"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
     if(msg_status == 1){
@@ -188,16 +210,8 @@ void StartS1(void){
 }
 
 void StartS1_send_CS(void){
-    place_boat(myboard, 0, 0, 5, 0);                        //------------------Place my boats
-    place_boat(myboard, 2, 0, 4, 0);
-    place_boat(myboard, 1, 7, 4, 1);
-    place_boat(myboard, 4, 2, 3, 0);
-    place_boat(myboard, 6, 6, 3, 1);
-    place_boat(myboard, 6, 8, 3, 1);
-    place_boat(myboard, 9, 0, 2, 0);
-    place_boat(myboard, 9, 3, 2, 0);
-    place_boat(myboard, 7, 2, 2, 0);
-    place_boat(myboard, 6, 0, 2, 0);
+    place_boats_randomly(myboard);                        //------------------Place my boats randomly
+    //place_boats_standard(myboard);
 
     char own_checksum[14];                            //------------------Init checksum
     calculate_checksum(myboard, own_checksum);              //------------------Calculate own checksum
@@ -225,16 +239,7 @@ void StartS1_wait_Start(void){
 
 //-----------------StartS2 State
 void StartS2(void){
-    place_boat(myboard, 0, 0, 5, 0);                        //------------------Place my boats
-    place_boat(myboard, 2, 0, 4, 0);
-    place_boat(myboard, 1, 7, 4, 1);
-    place_boat(myboard, 4, 2, 3, 0);
-    place_boat(myboard, 6, 6, 3, 1);
-    place_boat(myboard, 6, 8, 3, 1);
-    place_boat(myboard, 9, 0, 2, 0);
-    place_boat(myboard, 9, 3, 2, 0);
-    place_boat(myboard, 7, 2, 2, 0);
-    place_boat(myboard, 6, 0, 2, 0);
+    place_boats_randomly(myboard);                        //------------------Place my boats randomly
 
     char own_checksum[14];                                  //------------------Init checksum
     calculate_checksum(myboard, own_checksum);              //------------------Calculate own checksum
@@ -267,8 +272,6 @@ void StartS2_send_Start(void){
 
 // enemyboard legend: 0-->did not shoot there already, 1-->shot there already, 2-->hit
 
-
-
 void Offense_shoot(void){
     #ifdef DEBUG_LVL_2
     LOG("in Offense_shoot\n");
@@ -277,6 +280,7 @@ void Offense_shoot(void){
     char shoot_msg[8] = {'B', 'O', 'O', 'M', '0', '0', '\n', '\0'};
     
     Shot next_shot = find_next_shot(enemyboard);
+    //Shot next_shot = find_next_shot_dumb(enemyboard);
 
     shoot_msg[4] = '0' + next_shot.col;
     shoot_msg[5] = '0' + next_shot.row;
@@ -301,8 +305,10 @@ void Offense_wait(void){
 
             if(rx_buffer[0] == 'T'){
                 enemyboard[last_shot.row*10 + last_shot.col] = 2;    //------------------If hit, mark the enemy board
+                shoot_weights[last_shot.col] -= 1;                  //------------------If hit successfully, decrease the weight of the column
                 if (check_win_or_loss() == 1){
-                    curr_state = GAMEENDWON;                              //---------?---------Check if win or loss
+                    gamestatus = 1;                            //------------------If win, set the gamestatus to 1
+                    curr_state = GAMEEND;                              //---------?---------Check if win or loss
 
                     #ifdef DEBUG_LVL_4
                     LOG("I won\n")
@@ -344,7 +350,8 @@ void Defense(void){
         LOG("i received a shot\n");
         #endif
         if (check_win_or_loss() == 2){
-            curr_state = GAMEENDLOST;
+            gamestatus = 2;
+            curr_state = GAMEEND;
             #ifdef DEBUG_LVL_1
             LOG("I thought i won\n");
             #endif
@@ -359,15 +366,44 @@ void Defense(void){
     }
 }
 
-void GameEndWon(void){
-    //LOG("GameEnd State\r\n");
+void Send_SF(void){
     LOG_Board_messages();
-    curr_state = IDLE;
+
+    if(player1 == 1){
+        curr_state = WAIT_SF;
+    }else{
+        curr_state = PROTOCOLERROR;
+    }
 }
-void GameEndLost(void){
-    //LOG("GameEndLost State\r\n");
-    LOG_Board_messages();
-    curr_state = IDLE;
+
+void Wait_SF(void){
+    if(field_msgs_count < 10){
+        int msg_status = receive_msg_with_certain_prefix("SF"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
+
+        if(msg_status == 1){
+            for (int i = 0; i < 10; i++){
+            field_msgs[field_msgs_count*10 + i] = rx_buffer[i+4] - '0';
+            }
+            field_msgs_count++;
+        }   
+    }
+    if(field_msgs_count == 10){
+        if(player1 == 1){
+            curr_state = PROTOCOLERROR;
+        }else{
+            curr_state = SEND_SF;
+        }
+    }
+}
+
+
+void GameEnd(void){
+    if(player1 == 1){ curr_state = SEND_SF; }
+    else{ curr_state = WAIT_SF; }
+    
+}
+void ProtocolError(void){
+    LOG('finished\n');
 }
 
 //-----------------End of Statemachine functions-----------------
@@ -438,16 +474,26 @@ void calculate_checksum(uint8_t* board, char* checksum){
 }
 
 int check_win_or_loss(void){                            //------------------Check if win or loss, returns 0 if neither, 1 if win, 2 if loss
+
+    #ifdef DEBUG_NO_WIN_LOOSE
+    return 0;
+    #endif
+
     int hits_on_me_count = 0;
     int hits_on_enemy_count = 0;
     for(uint8_t i = 0; i < 100; i++){
         if(hits_on_me[i] == 1){
             hits_on_me_count++;
         }
+
         if(enemyboard[i] == 2){
             hits_on_enemy_count++;
         }
     }
+
+    #ifdef DEBUG_ENDGAME
+    hits_on_enemy_count = 30;
+    #endif
 
     if(hits_on_me_count == 30){
         // I lost
@@ -472,7 +518,7 @@ void LOG_Board_messages(void){
     }
 }
 
-int is_valid_position(int col, int row, int direction, int size) {
+uint8_t is_valid_position(uint8_t col, uint8_t row, uint8_t direction, uint8_t size) {
     //---------------check if the boat ends p being out of bounds when placed, depending on location, orientation and size
     //---------------return 1 if planned location is ok, return 0 if not
     if (direction == 0) {
@@ -490,18 +536,18 @@ int is_valid_position(int col, int row, int direction, int size) {
     }
 }
 
-int is_not_reserved(int col, int row, int direction, int size, uint8_t* res_slots) {
+uint8_t is_not_reserved(uint8_t col, uint8_t row, uint8_t direction, uint8_t size, uint8_t* res_slots) {
     //---------------check if planned placing spot is already reserved by other boats (leaving one field of space between)
     //---------------return 1 if planned location is ok, return 0 if it is already reserved
     if (direction == 0) {
-        for (int i = 0; i < size; i++) {
+        for (uint8_t i = 0; i < size; i++) {
             if (res_slots[row * 10 + col + i] == 1) {
                 return 0;
             }
         }
     }
     else if (direction == 1) {
-        for (int i = 0; i < size; i++) {
+        for (uint8_t i = 0; i < size; i++) {
             if (res_slots[(row + i) * 10 + col] == 1) {
                 return 0;
             }
@@ -512,7 +558,7 @@ int is_not_reserved(int col, int row, int direction, int size, uint8_t* res_slot
     }
 }
 
-void place_boat_and_reserve(int col, int row, int direction, int size, uint8_t* res_slots, uint8_t* board) {
+void place_boat_and_reserve(uint8_t col, uint8_t row, uint8_t direction, uint8_t size, uint8_t* res_slots, uint8_t* board) {
     //---------------called after checking location and reservations, places boat and reserves space 1 tile around it
     if (direction == 0) {
         for (int i = 0; i < size; i++) {
@@ -548,10 +594,13 @@ void place_boats_randomly(uint8_t* board) {
     //---------------randomly place boats on the board, leaving one tile of space between them
     uint8_t res_fields[10 * 10] = { 0 };                                    //------------------array containing reservations
     uint8_t boat_sizes[] = { 5, 4, 4, 3, 3, 3, 2, 2, 2, 2 };                //------------------array of the boats needed to be placed
-    int array_size = sizeof(boat_sizes) / sizeof(boat_sizes[0]);            //------------------calcing size of the array
+    uint8_t array_size = sizeof(boat_sizes) / sizeof(boat_sizes[0]);            //------------------calcing size of the array
 
-    for (int boat = 0; boat < array_size; boat++) {
-        while (1) {
+    for (uint8_t boat = 0; boat < array_size; boat++) {
+        uint8_t tries = 0;
+        uint8_t placed = 0;
+
+        while (tries < 300) {
             uint8_t row = rand() % 10;                                      //------------------generate random numbers for location and rotation
             uint8_t col = rand() % 10;
             uint8_t direction = rand() % 2;
@@ -559,30 +608,89 @@ void place_boats_randomly(uint8_t* board) {
             //------------------check if position is valid and if not in reserved spots
             if (is_valid_position(col, row, direction, boat_sizes[boat]) && is_not_reserved(col, row, direction, boat_sizes[boat], res_fields)) {
                 place_boat_and_reserve(col, row, direction, boat_sizes[boat], res_fields, board); //------------------place the boat and reserve tiles around it
+                placed = 1;
                 break;
             }
+            tries++;
         }
+        if (!placed) {
+            for (uint8_t i = 0; i < 100; i++) { board[i] = 0; }
+            place_boats_standard(board); //------------------if no valid random placement was found, place standard layout
+        } 
     }
 }
 
-Shot find_next_shot(uint8_t* enemyboard){
-    for (int col = 0; col < 10; col++){
-        for (int row = 0; row < 10; row++){
 
-            if(enemyboard[row*10 + col] == 2){
-                //------check to the right, left, down and up if there is a hit
-                if (col + 1 < 10 && enemyboard[row*10 + col + 1] == 0){
-                    return (Shot){row, col + 1};
-                }else if (col - 1 >= 0 && enemyboard[row*10 + col - 1] == 0){
-                    return (Shot){row, col - 1};
-                }else if (row + 1 < 10 && enemyboard[(row + 1)*10 + col] == 0){
-                    return (Shot){row + 1, col};
-                }else if (row - 1 >= 0 && enemyboard[(row - 1)*10 + col] == 0){
-                    return (Shot){row - 1, col};
+void place_boats_standard(uint8_t* board){ //--------------fixed layout, used if no random layout found in several 
+    place_boat(myboard, 0, 0, 5, 0);
+    place_boat(myboard, 2, 0, 4, 0);
+    place_boat(myboard, 1, 7, 4, 1);
+    place_boat(myboard, 4, 2, 3, 0);
+    place_boat(myboard, 6, 6, 3, 1);
+    place_boat(myboard, 6, 8, 3, 1);
+    place_boat(myboard, 9, 0, 2, 0);
+    place_boat(myboard, 9, 3, 2, 0);
+    place_boat(myboard, 7, 2, 2, 0);
+    place_boat(myboard, 6, 0, 2, 0);
+}
+
+Shot find_next_shot(uint8_t* enemyboard){
+
+    //int direction = 0; //--------------0 for no, 1 for north, 2 for east, 3 for south, 4 for west
+    int prefer_random = 0;
+    int c = 0;
+    int r = 0;
+
+    for (int col = 0; col < 10; col++) {
+        for (int row = 0; row < 10; row++) {
+            prefer_random = 0;
+            if (enemyboard[row * 10 + col] == 2) {
+                // Check if there is a hit beside another hit, assume ship facing that way
+                if (col + 1 < 10 && enemyboard[row * 10 + col + 1] == 2) {
+                    prefer_random = 1;
+                    c = col;
+                    r = row;
+                    while (c + 1 < 10 && enemyboard[r * 10 + c + 1] == 2) { c++; }
+                    if (c + 1 < 10 && enemyboard[r * 10 + c + 1] == 0) { return (Shot){r, c + 1}; }
+                }
+                if (col - 1 >= 0 && enemyboard[row * 10 + col - 1] == 2) {
+                    prefer_random = 1;
+                    c = col;
+                    r = row;
+                    while (c - 1 >= 0 && enemyboard[r * 10 + c - 1] == 2) { c--; }
+                    if (c - 1 >= 0 && enemyboard[r * 10 + c - 1] == 0) { return (Shot){r, c - 1}; }
+                }
+                if (row + 1 < 10 && enemyboard[(row + 1) * 10 + col] == 2) {
+                    prefer_random = 1;
+                    c = col;
+                    r = row;
+                    while (r + 1 < 10 && enemyboard[(r + 1) * 10 + c] == 2) { r++; }
+                    if (r + 1 < 10 && enemyboard[(r + 1) * 10 + c] == 0) { return (Shot){r + 1, c}; }
+                }
+                if (row - 1 >= 0 && enemyboard[(row - 1) * 10 + col] == 2) {
+                    prefer_random = 1;
+                    c = col;
+                    r = row;
+                    while (r - 1 >= 0 && enemyboard[(r - 1) * 10 + c] == 2) { r--; }
+                    if (r - 1 >= 0 && enemyboard[(r - 1) * 10 + c] == 0) { return (Shot){r - 1, c}; }
+                }
+
+                // Check to the right, left, down, and up if there is a hit
+                if (prefer_random == 0) {
+                    if (col + 1 < 10 && enemyboard[row * 10 + col + 1] == 0) {
+                        return (Shot){row, col + 1};
+                    } else if (col - 1 >= 0 && enemyboard[row * 10 + col - 1] == 0) {
+                        return (Shot){row, col - 1};
+                    } else if (row + 1 < 10 && enemyboard[(row + 1) * 10 + col] == 0) {
+                        return (Shot){row + 1, col};
+                    } else if (row - 1 >= 0 && enemyboard[(row - 1) * 10 + col] == 0) {
+                        return (Shot){row - 1, col};
+                    }
                 }
             }
         }
     }
+
     //------------------If no hit was found, shoot with weighted randomness-------------------//
 
     //------calculate the total weight of the enemy board through checksum
@@ -596,14 +704,54 @@ Shot find_next_shot(uint8_t* enemyboard){
     while(1){
         uint8_t randrow = rand() % 10;
         if (enemyboard[randrow*10 + chosen_col] == 0){
-            shoot_weights[chosen_col] -= 1;
+            //shoot_weights[chosen_col] -= 1;
             return (Shot){randrow, chosen_col};
         }
     }
 }
 
-//is_enemy_cs_30()
+Shot find_next_shot_dumb(uint8_t* enemyboard){
+    for (int col = 0; col < 10; col++){
+        for (int row = 0; row < 10; row++){
+            if(enemyboard[row*10 + col] == 0){
+                return (Shot){row, col};
+            }
+        }
+    }
+    return (Shot){0, 0};
+}
 
-//do_cs_and_hits_match()
+
+int is_enemy_cs_30(int* enemycs){
+    int sum = 0;
+    for (int i = 0; i < 10; i++){
+        sum += enemycs[i];
+    }
+    if (sum == 30){
+        return 1;
+    }else{
+        return 0;
+    }
+}
+
+int do_cs_and_hits_match(int* enemycs, int* enemyboard){
+
+
+}
 
 //has_enemy_cs_10_digits
+
+void reset_game(void){
+    player1 = 0;
+    gamestatus = 0;
+    field_msgs_count = 0;
+    for ( int i = 0; i < 10*10; i++){
+        myboard[i] = 0;
+        enemyboard[i] = 0;
+        hits_on_me[i] = 0;
+        enemycs[i] = 0;
+        shoot_weights[i] = 0;
+
+        field_msgs[i] = 0;
+    }
+}
