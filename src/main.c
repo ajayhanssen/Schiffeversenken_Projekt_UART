@@ -7,15 +7,14 @@
 #include "parsing.h"
 
 #define DEBUG
-//#define DEBUG_LVL_1
-//#define DEBUG_LVL_2
-//#define DEBUG_LVL_3
-//#define DEBUG_LVL_4
-//#define DEBUG_LVL_5
+//#define DEBUG_SCHIFFPY
 //#define DEBUG_NO_WIN_LOOSE
 //#define DEBUG_HTERM
 //#define DEBUG_ENDGAME
 //#define DEBUG_SET_LAYOUT
+//#define MODE_REAL_YC
+#define CHEATING_LOG_ACTIVE
+#define LOG_MESSAGES_ACTIVE
 
 // This is a simple macro to print debug messages if DEBUG is defined
 #ifdef DEBUG
@@ -117,12 +116,14 @@ static uint8_t myboard[10*10] = {0};                           //---------------
 static uint8_t enemyboard[10*10] = {0};                        //------------------Init enemy board (Reihe*10 + Spalte (0-9!!!))
 static uint8_t hits_on_me[10*10] = {0};                        //------------------Init hits on me (Reihe*10 + Spalte (0-9!!!))
 
+static uint8_t myweights[10] = {0};                                 //------------------Init my checksum array
 static uint8_t enemycs[10] = {0};                              //------------------Init enemy checksum array
-static uint8_t shoot_weights[10] = {0};                              //------------------Init weights for shooting logic array
+static uint8_t shoot_weights[10] = {0};                        //------------------Init weights for shooting logic array
 
 static uint8_t field_msgs[10*10] = {0};                        //------------------Init array for holding enemy field message
 static uint8_t field_msgs_count = 0;
 
+static uint8_t hit_mycs_count = 0;                             //------------------How often they hit highest column in mycs in a row
 typedef struct{
     uint8_t row;
     uint8_t col;
@@ -222,6 +223,11 @@ void StartS1_send_CS(void){
 
     char own_checksum[14];                            //------------------Init checksum
     calculate_checksum(myboard, own_checksum);              //------------------Calculate own checksum
+
+    for(int i = 0; i < 10; i++){
+        myweights[i] = own_checksum[i+2] - '0';               //------------------Save my own checksum as ints
+    }
+
     LOG("%s", own_checksum);                             //------------------Send own checksum
 
     curr_state = STARTS1_WAIT_START;                     //------------------Change the state, wait for Start_msg from S2
@@ -255,6 +261,11 @@ void StartS2(void){
 
     char own_checksum[14];                                  //------------------Init checksum
     calculate_checksum(myboard, own_checksum);              //------------------Calculate own checksum
+
+    for(int i = 0; i < 10; i++){
+        myweights[i] = own_checksum[i+2] - '0';               //------------------Save my own checksum as ints
+    }
+
     LOG("%s", own_checksum);                             //------------------Send own checksum
 
     curr_state = STARTS2_WAIT_CS;                     //------------------Change the state, wait for Start_msg from S2
@@ -304,7 +315,9 @@ void Offense_shoot(void){
     last_shot = next_shot;
     curr_state = OFFENSE_WAIT;            //------------------Change the state, going to waiting for response
         
-        
+    #ifdef DEBUG_SCHIFFPY
+    LOG("#servus\n");
+    #endif
 }
 
 void Offense_wait(void){
@@ -351,20 +364,25 @@ void Defense(void){
     
     gameiterations++;
 
-    int msg_status = receive_msg_with_certain_prefix("BOOM"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
+    int msg_status = receive_msg_with_certain_prefix("BOOM");           //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
     if(msg_status == 1){
-        int shot_received_col = rx_buffer[4] - '0';  //------------------Get the row of the shot
-        int shot_received_row = rx_buffer[5] - '0';  //------------------Get the col of the shot
-        if(myboard[shot_received_row*10 + shot_received_col] != 0){
-            LOG("T\n");                             //------------------If hit, send T
-            hits_on_me[shot_received_row*10 + shot_received_col] = 1;    //------------------If hit, mark the hits_on_me board
+        Shot received_shot;
+        received_shot.col = rx_buffer[4] - '0';                         //------------------Get the row of the shot
+        received_shot.row = rx_buffer[5] - '0';                         //------------------Get the col of the shot
+
+        if(myboard[received_shot.row*10 + received_shot.col] != 0){
+            LOG("T\n");                                                 //------------------If hit, send T
+            hits_on_me[received_shot.row*10 + received_shot.col] = 1;   //------------------If hit, mark the hits_on_me board
+            myweights[received_shot.col] -= 1;                          //------------------If hit successfully, decrease the weight of the column
         }else{
-            LOG("W\n");                             //------------------If miss, send M
+            LOG("W\n");                                                 //------------------If miss, send W
         }
+
         #ifdef DEBUG_LVL_1
         LOG("i received a shot\n");
         #endif
+
         if (check_win_or_loss() == 2){
             gamestatus = 2;
             curr_state = GAMEEND;
@@ -776,7 +794,7 @@ Shot find_next_shot_dumb(uint8_t* enemyboard){
 }
 
 
-int is_enemy_cs_30(int* enemycs){
+uint8_t is_enemy_cs_30(int* enemycs){
     int sum = 0;
     for (int i = 0; i < 10; i++){
         sum += enemycs[i];
@@ -785,14 +803,19 @@ int is_enemy_cs_30(int* enemycs){
         return 1;
     }else{
         return 0;
+
+        #ifdef CHEATING_LOG_ACTIVE
+        LOG("Enemy CS sum does not equal 30\n");
+        #endif
+
     }
 }
 
-int do_cs_and_hits_match(int* enemycs, int* enemyboard){ //--------------check if the checksum and the hits on the enemy board match, 1 if yes, 0 if cheater
+uint8_t do_cs_and_hits_match(uint8_t* enemycs, uint8_t* enemyboard){ //--------------check if the checksum and the hits on the enemy board match, 1 if yes, 0 if cheater
 
     for (int col = 0; col < 10; col++) {
-        int colhitsum = 0;
-        int colwatersum = 0;
+        uint8_t colhitsum = 0;
+        uint8_t colwatersum = 0;
 
         for (int row = 0; row < 10; row++) {
             if (enemyboard[row * 10 + col] == 2) {
@@ -805,7 +828,7 @@ int do_cs_and_hits_match(int* enemycs, int* enemyboard){ //--------------check i
         // If the hits exceed the checksum or the water tiles exceed the possible number of water tiles
         if (colhitsum > enemycs[col] || colwatersum > (10 - enemycs[col])) {
 
-            #ifdef DEBUG_HTERM
+            #ifdef CHEATING_LOG_ACTIVE
             LOG("Checksum inconsistensies found\n");
             #endif
 
@@ -815,7 +838,7 @@ int do_cs_and_hits_match(int* enemycs, int* enemyboard){ //--------------check i
     return 1;  //--------All columns match
 }
 
-int more_than_100_iterations(void){
+uint8_t more_than_100_iterations(void){
     if (gameiterations > 200){
         return 1;
     }else{
@@ -823,10 +846,15 @@ int more_than_100_iterations(void){
     }
 }
 
-int does_board_message_match(uint8_t* field_msgs, uint8_t* enemyboard){
+uint8_t does_board_message_match(uint8_t* field_msgs, uint8_t* enemyboard){
     for(int col = 0; col < 10; col++){
         for(int row = 0; row < 10; row++){
             if (field_msgs[col*10 + row] >= 2 && enemyboard[row*10 + col] == 1){
+
+                #ifdef CHEATING_LOG_ACTIVE
+                LOG("Field message and board do not match\n");
+                #endif
+
                 return 0; //-------cheated, marked hit on field message but not on board
             }else{
                 return 1;
@@ -835,6 +863,31 @@ int does_board_message_match(uint8_t* field_msgs, uint8_t* enemyboard){
     }
 }
 
+uint8_t they_using_my_cs(uint8_t* myweights, Shot their_last_shot){
+
+    uint8_t my_highest_col = 0;
+    for (uint8_t i = 0; i < 10; i++){
+        if (myweights[i] > myweights[my_highest_col]){
+            my_highest_col = i;
+        }
+    }
+    if (their_last_shot.col == my_highest_col){
+        hit_mycs_count++;
+    }else{
+        hit_mycs_count = 0;
+    }
+
+    if (hit_mycs_count >= 5){
+
+        #ifdef CHEATING_LOG_ACTIVE
+        LOG("They are probably using my checksum\n");
+        #endif
+
+        return 1;
+    }else{
+        return 0;
+    }
+}
 
 void reset_game(void){              //--------------reset all variables to start a new game, not used, just press reset-button
     player1 = 0;
