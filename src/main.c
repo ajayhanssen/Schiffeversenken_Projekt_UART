@@ -10,11 +10,12 @@
 //#define DEBUG_SCHIFFPY
 //#define DEBUG_NO_WIN_LOOSE
 //#define DEBUG_HTERM
-//#define DEBUG_ENDGAME
+//#define DEBUG_ENDGAME_WIN
+//#define DEBUG_ENDGAME_LOSS
 //#define DEBUG_SET_LAYOUT
 //#define MODE_REAL_YC
-#define CHEATING_LOG_ACTIVE
-#define LOG_MESSAGES_ACTIVE
+//#define CHEATING_LOG_ACTIVE
+//#define LOG_MESSAGES_ACTIVE
 
 // This is a simple macro to print debug messages if DEBUG is defined
 #ifdef DEBUG
@@ -337,7 +338,7 @@ void Offense_wait(void){
                     gamestatus = 1;                            //------------------If win, set the gamestatus to 1
                     curr_state = GAMEEND;                              //---------?---------Check if win or loss
 
-                    #ifdef DEBUG_LVL_4
+                    #ifdef DEBUG_HTERM
                     LOG("I won\n")
                     #endif
                 }else{
@@ -387,7 +388,7 @@ void Defense(void){
             gamestatus = 2;
             curr_state = GAMEEND;
             #ifdef DEBUG_HTERM
-            LOG("I won\n");
+            LOG("I lost\n");
             #endif
         }else{
             curr_state = OFFENSE_SHOOT;
@@ -542,8 +543,12 @@ int check_win_or_loss(void){                            //------------------Chec
         }
     }
 
-    #ifdef DEBUG_ENDGAME
+    #ifdef DEBUG_ENDGAME_WIN
     hits_on_enemy_count = 30;
+    #endif
+
+    #ifdef DEBUG_ENDGAME_LOSS
+    hits_on_me_count = 30;
     #endif
 
     if(hits_on_me_count == 30){
