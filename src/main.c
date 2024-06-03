@@ -695,6 +695,8 @@ void place_boats_standard(uint8_t* board){ //--------------fixed layout, used if
 
 Shot find_next_shot(uint8_t* enemyboard){
 
+    uint8_t longest_ship = find_longest_known_ship(enemyboard);
+
     //int direction = 0; //--------------0 for no, 1 for north, 2 for east, 3 for south, 4 for west
     int prefer_random = 0;
     int c = 0;
@@ -766,7 +768,7 @@ Shot find_next_shot(uint8_t* enemyboard){
         if (enemyboard[randrow*10 + chosen_col] == 0){
             
             if(are_adjacent_hits(enemyboard, randrow, chosen_col) == 1){ //--------------if there have been hits in adjacent columns, shoot with 1/10 chance
-                if (rand() % 10 == 0){
+                if (rand() % 30 == 0){
                     return (Shot){randrow, chosen_col};
                 }
             }else{                                                       //--------------if there have not been hits in adjacent columns, shoot there
@@ -798,6 +800,42 @@ Shot find_next_shot_dumb(uint8_t* enemyboard){
     return (Shot){0, 0};
 }
 
+uint8_t find_longest_known_ship(uint8_t* board){
+
+    uint8_t longest_ship = 0;
+
+    for (int col = 0; col < 10; col++){
+        uint8_t ship_length = 0;
+        for (int row = 0; row < 10; row++){
+            if (board[row*10 + col] == 2){
+                ship_length++;
+            }else{
+                if (ship_length > longest_ship){
+                    longest_ship = ship_length;
+                }
+                ship_length = 0;
+            
+            }
+        }
+        
+    }
+
+    for (int row = 0; row < 10; row++){
+        uint8_t ship_length = 0;
+        for (int col = 0; col < 10; col++){
+            if (board[row*10 + col] == 2){
+                ship_length++;
+            }else{
+                if (ship_length > longest_ship){
+                    longest_ship = ship_length;
+                }
+                ship_length = 0;
+            }
+        }
+    }
+
+    return longest_ship;
+}
 
 uint8_t is_enemy_cs_30(int* enemycs){
     int sum = 0;
