@@ -16,6 +16,7 @@
 //#define MODE_REAL_YC
 //#define CHEATING_LOG_ACTIVE
 //#define LOG_MESSAGES_ACTIVE
+//#define REAL_OPPONENT
 
 // This is a simple macro to print debug messages if DEBUG is defined
 #ifdef DEBUG
@@ -37,7 +38,17 @@ int _write( int handle, char* data, int size ) {
     return size;
 }
 
-void UART_config(void){
+int SEND( char* data) {
+    int count = strlen(data);
+
+    while( count-- ) {
+        while( !( USART1->ISR & USART_ISR_TXE ) ) {};
+        USART1->TDR = *data++;
+    }
+    return count;
+}
+
+void UART2_config(void){
     // Enable peripheral  GPIOA clock
     RCC->AHBENR |= RCC_AHBENR_GPIOAEN;
     // Enable peripheral  USART2 clock
@@ -57,6 +68,28 @@ void UART_config(void){
     // Enable the UART using the CR1 register
     USART2->CR1 |= ( USART_CR1_RE | USART_CR1_TE | USART_CR1_UE );
 }
+
+void UART1_config(void){
+    // Enable peripheral  GPIOA clock
+    RCC->AHBENR |= RCC_AHBENR_GPIOAEN;
+    // Enable peripheral  USART2 clock
+    RCC->APB2ENR |= RCC_APB2ENR_USART1EN;
+
+    // Configure PA2 as USART2_TX using alternate function 1
+    GPIOA->MODER |= GPIO_MODER_MODER9_1;
+    GPIOA->AFR[0] |= 0b0001 << (4*2);
+
+
+    // Configure PA3 as USART2_RX using alternate function 1
+    GPIOA->MODER |= GPIO_MODER_MODER10_1;
+    GPIOA->AFR[0] |= 0b0001 << (4*3);
+
+    // Configure the UART Baude rate Register 
+    USART1->BRR = (APB_FREQ / BAUDRATE);
+    // Enable the UART using the CR1 register
+    USART1->CR1 |= ( USART_CR1_RE | USART_CR1_TE | USART_CR1_UE );
+}
+
 
 void blue_button_config(void){
     RCC->AHBENR |= RCC_AHBENR_GPIOCEN;
@@ -145,7 +178,8 @@ char st_ch = '\n';
 int main(void){
     // Configure the system clock to 48MHz
     EPL_SystemClock_Config();
-    UART_config();
+    UART1_config();
+    UART2_config();
 
     // Enable the GPIOC peripheral clock
     RCC->AHBENR |= RCC_AHBENR_GPIOCEN;
@@ -185,7 +219,14 @@ void Idle(void){
 
     // If the blue button is pressed, my yConti becomes S1
     if(!(GPIOC->IDR & GPIO_IDR_13)){
-        LOG("START52216067\n")
+
+        #ifdef REAL_OPPONENT
+        SEND("START52216067\n");
+        LOG("START message sent\n");
+        #else
+        LOG("START52216067\n");
+        #endif
+
         srand(seed);
         curr_state = STARTS1;
     }
@@ -210,7 +251,7 @@ void StartS1(void){
         }
         curr_state = STARTS1_SEND_CS;                           //-----------------Change the checksum received flag    
     }else if(msg_status == 2){
-        LOG("Invalid Message\n");
+        LOG("Invalid Message, expected CS\n");
     }
 
 }
@@ -229,7 +270,12 @@ void StartS1_send_CS(void){
         myweights[i] = own_checksum[i+2] - '0';               //------------------Save my own checksum as ints
     }
 
+    #ifdef REAL_OPPONENT
+    SEND(own_checksum);
+    LOG("CS sent\n");
+    #else
     LOG("%s", own_checksum);                             //------------------Send own checksum
+    #endif
 
     curr_state = STARTS1_WAIT_START;                     //------------------Change the state, wait for Start_msg from S2
 }
@@ -246,7 +292,7 @@ void StartS1_wait_Start(void){
         //LOG("successfully read Startmsg");
         #endif
     }else if(msg_status == 2){
-        LOG("Invalid Message\n");
+        LOG("Invalid Message, expected START\n");
     }
 }
 
@@ -267,7 +313,12 @@ void StartS2(void){
         myweights[i] = own_checksum[i+2] - '0';               //------------------Save my own checksum as ints
     }
 
+    #ifdef REAL_OPPONENT
+    SEND(own_checksum);
+    LOG("CS sent\n");
+    #else
     LOG("%s", own_checksum);                             //------------------Send own checksum
+    #endif
 
     curr_state = STARTS2_WAIT_CS;                     //------------------Change the state, wait for Start_msg from S2
 }
@@ -283,12 +334,18 @@ void StartS2_wait_CS(void){
         }
         curr_state = STARTS2_SEND_START;                           //-----------------Change the checksum received flag
     }else if(msg_status == 2){
-        LOG("Invalid Message\n");
+        LOG("Invalid Message, expected CS\n");
     }
 }
 
 void StartS2_send_Start(void){
+    #ifdef REAL_OPPONENT
+    SEND("START52216067\n");
+    LOG("START message sent\n");
+    #else
     LOG("START52216067\n");
+    #endif
+
     curr_state = DEFENSE;                      //-----------------Change the state, going to Defense
 }
 
@@ -310,15 +367,18 @@ void Offense_shoot(void){
 
     shoot_msg[4] = '0' + next_shot.col;
     shoot_msg[5] = '0' + next_shot.row;
+
+    #ifdef REAL_OPPONENT
+    SEND(shoot_msg);
+    LOG("I shot at %d, %d\n", next_shot.row, next_shot.col);
+    #else
     LOG("%s", shoot_msg);
+    #endif
 
     enemyboard[next_shot.row*10 + next_shot.col] = 1;
     last_shot = next_shot;
     curr_state = OFFENSE_WAIT;            //------------------Change the state, going to waiting for response
         
-    #ifdef DEBUG_SCHIFFPY
-    LOG("#servus\n");
-    #endif
 }
 
 void Offense_wait(void){
@@ -332,29 +392,32 @@ void Offense_wait(void){
             rx_buffer[rx_index] = '\0';
 
             if(rx_buffer[0] == 'T'){
+                #ifdef REAL_OPPONENT
+                LOG("I hit\n");
+                #endif
                 enemyboard[last_shot.row*10 + last_shot.col] = 2;    //------------------If hit, mark the enemy board
                 shoot_weights[last_shot.col] -= 1;                  //------------------If hit successfully, decrease the weight of the column
                 if (check_win_or_loss() == 1){
                     gamestatus = 1;                            //------------------If win, set the gamestatus to 1
                     curr_state = GAMEEND;                              //---------?---------Check if win or loss
 
-                    #ifdef DEBUG_HTERM
+                    #ifdef REAL_OPPONENT
                     LOG("I won\n")
                     #endif
                 }else{
                     curr_state = DEFENSE;                                 //------------------Change the state, going to Defense
-                    //LOG("now transitioning to defense\n");
                 }
+
             }else if(rx_buffer[0] == 'W'){
+                #ifdef REAL_OPPONENT
+                LOG("I missed\n");
+                #endif
                 enemyboard[last_shot.row*10 + last_shot.col] = 1;
                 curr_state = DEFENSE;                                 //------------------Change the state, going to Defense
             }
             rx_index = 0;
         }else if (rx_index < BUFFERSIZE - 1){
             rx_buffer[rx_index++] = received_char;
-            #ifdef DEBUG_LVL_3
-            LOG("received char: %c\n", received_char);
-            #endif
         }        
     }
 }
@@ -373,11 +436,22 @@ void Defense(void){
         received_shot.row = rx_buffer[5] - '0';                         //------------------Get the col of the shot
 
         if(myboard[received_shot.row*10 + received_shot.col] != 0){
-            LOG("T\n");                                                 //------------------If hit, send T
+            #ifdef REAL_OPPONENT
+            SEND("T\n");                                                //------------------If hit, send T
+            LOG("They hit at %d, %d\n", received_shot.row, received_shot.col);
+            #else
+            LOG("T\n");
+            #endif
+
             hits_on_me[received_shot.row*10 + received_shot.col] = 1;   //------------------If hit, mark the hits_on_me board
             myweights[received_shot.col] -= 1;                          //------------------If hit successfully, decrease the weight of the column
         }else{
+            #ifdef REAL_OPPONENT
+            SEND("W\n");                                                //------------------If miss, send W
+            LOG("They missed at %d, %d\n", received_shot.row, received_shot.col);
+            #else
             LOG("W\n");                                                 //------------------If miss, send W
+            #endif
         }
 
         #ifdef DEBUG_LVL_1
@@ -387,9 +461,11 @@ void Defense(void){
         if (check_win_or_loss() == 2){
             gamestatus = 2;
             curr_state = GAMEEND;
-            #ifdef DEBUG_HTERM
+
+            #ifdef REAL_OPPONENT
             LOG("I lost\n");
             #endif
+
         }else{
             curr_state = OFFENSE_SHOOT;
             #ifdef DEBUG_LVL_1
@@ -397,18 +473,18 @@ void Defense(void){
             #endif
         }
     }else if(msg_status == 2){
-        LOG("Invalid Message\n");
+        LOG("Invalid Message, expected BOOMxx\n");
     }
 }
 
 void Send_SF(void){
-    LOG_Board_messages();
+    SEND_Board_messages();
 
     if(player1 == 1){
         curr_state = WAIT_SF;
 
-        #ifdef DEBUG_HTERM
-        LOG("now waiting for checksum\n");
+        #ifdef REAL_OPPONENT
+        LOG("Now waiting for Board-message\n");
         #endif
 
     }else{
@@ -443,7 +519,9 @@ void Wait_SF(void){
 }
 
 void ProtocolError(void){
+    #ifdef DEBUG_HTERM
     LOG("finished\n");
+    #endif
 }
 
 void GameEnd(void){
@@ -562,7 +640,7 @@ int check_win_or_loss(void){                            //------------------Chec
     }
 }
 
-void LOG_Board_messages(void){
+void SEND_Board_messages(void){
     for (int col = 0; col < 10; col++){
         
         char curr_msg[] = {'S', 'F', '0', 'D', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '\n', '\0'};
@@ -570,9 +648,13 @@ void LOG_Board_messages(void){
         for (int row = 0; row < 10; row++){
             curr_msg[row+4] += myboard[row*10 + col];
         }
+        #ifdef REAL_OPPONENT
+        SEND(curr_msg);
+        #else
         LOG("%s", curr_msg);
+        #endif
     }
-    #ifdef DEBUG_HTERM
+    #ifdef REAL_OPPONENT
     LOG("finished sending checksum\n");
     #endif
 }
@@ -695,7 +777,7 @@ void place_boats_standard(uint8_t* board){ //--------------fixed layout, used if
 
 Shot find_next_shot(uint8_t* enemyboard){
 
-    uint8_t longest_ship = find_longest_known_ship(enemyboard);
+    //uint8_t longest_ship = find_longest_known_ship(enemyboard);
 
     //int direction = 0; //--------------0 for no, 1 for north, 2 for east, 3 for south, 4 for west
     int prefer_random = 0;
