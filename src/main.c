@@ -13,7 +13,6 @@
 //#define DEBUG_ENDGAME_WIN
 //#define DEBUG_ENDGAME_LOSS
 //#define DEBUG_SET_LAYOUT
-//#define MODE_REAL_YC
 //#define CHEATING_LOG_ACTIVE
 //#define LOG_MESSAGES_ACTIVE
 //#define REAL_OPPONENT
@@ -38,7 +37,7 @@ int _write( int handle, char* data, int size ) {
     return size;
 }
 
-int SEND( char* data) {
+int SEND( char* data ) {
     int count = strlen(data);
 
     while( count-- ) {
@@ -166,6 +165,7 @@ typedef struct{
 Shot find_next_shot(uint8_t* enemyboard);
 Shot find_next_shot_dumb(uint8_t* enemyboard);
 uint8_t are_adjacent_hits(uint8_t* enemyboard, uint8_t row, uint8_t col);
+uint8_t find_longest_available_ship(uint8_t* board);
 
 static Shot last_shot = {0, 0};
 
@@ -187,6 +187,7 @@ int main(void){
     GPIO_OUTPUT_CONFIG(GPIOA, 5);
 
     initializeSM();
+    clear_UART_RX_buffer();
 
     for(;;){
     
@@ -387,6 +388,8 @@ void Offense_wait(void){
     #endif
     if(USART2->ISR & USART_ISR_RXNE){
         
+
+
         char received_char = USART2->RDR;
         if(received_char == st_ch){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';
@@ -414,7 +417,15 @@ void Offense_wait(void){
                 #endif
                 enemyboard[last_shot.row*10 + last_shot.col] = 1;
                 curr_state = DEFENSE;                                 //------------------Change the state, going to Defense
+            }else if(rx_buffer[0]=='S'){
+                for(int i = 0; i < 10; i++){
+                    field_msgs[field_msgs_count*10 + i] = rx_buffer[i+4] - '0';
+                }
+                field_msgs_count++;
+                curr_state = GAMEEND;
             }
+
+
             rx_index = 0;
         }else if (rx_index < BUFFERSIZE - 1){
             rx_buffer[rx_index++] = received_char;
@@ -435,16 +446,24 @@ void Defense(void){
         received_shot.col = rx_buffer[4] - '0';                         //------------------Get the row of the shot
         received_shot.row = rx_buffer[5] - '0';                         //------------------Get the col of the shot
 
+        uint8_t hits_on_me_count = get_hit_count(hits_on_me);           //------------------Get the number of hits on me
+
         if(myboard[received_shot.row*10 + received_shot.col] != 0){
-            #ifdef REAL_OPPONENT
-            SEND("T\n");                                                //------------------If hit, send T
-            LOG("They hit at %d, %d\n", received_shot.row, received_shot.col);
-            #else
-            LOG("T\n");
-            #endif
+            
+            if(hits_on_me_count == 29){
+                curr_state = GAMEEND;
+            }else{
+                #ifdef REAL_OPPONENT
+                SEND("T\n");                                                //------------------If hit, send T
+                LOG("They hit at %d, %d\n", received_shot.row, received_shot.col);
+                #else
+                LOG("T\n");
+                #endif
+            }
 
             hits_on_me[received_shot.row*10 + received_shot.col] = 1;   //------------------If hit, mark the hits_on_me board
             myweights[received_shot.col] -= 1;                          //------------------If hit successfully, decrease the weight of the column
+
         }else{
             #ifdef REAL_OPPONENT
             SEND("W\n");                                                //------------------If miss, send W
@@ -479,17 +498,7 @@ void Defense(void){
 
 void Send_SF(void){
     SEND_Board_messages();
-
-    if(player1 == 1){
-        curr_state = WAIT_SF;
-
-        #ifdef REAL_OPPONENT
-        LOG("Now waiting for Board-message\n");
-        #endif
-
-    }else{
-        curr_state = PROTOCOLERROR;
-    }
+    curr_state = WAIT_SF;
 }
 
 void Wait_SF(void){
@@ -505,16 +514,7 @@ void Wait_SF(void){
         }   
     }
     if(field_msgs_count == 10){
-        if(player1 == 1){
-            curr_state = PROTOCOLERROR;
-        }else{
-            curr_state = SEND_SF;
-
-            #ifdef DEBUG_HTERM
-            LOG("finished receiving checksum\n");
-            #endif
-
-        }
+        curr_state = PROTOCOLERROR;
     }
 }
 
@@ -522,6 +522,7 @@ void ProtocolError(void){
     #ifdef DEBUG_HTERM
     LOG("finished\n");
     #endif
+    reset_game();
 }
 
 void GameEnd(void){
@@ -530,8 +531,7 @@ void GameEnd(void){
     if(player1 == 1){LOG("Game ended, i am player 1\n")}else{LOG("Game ended, i am player 2\n")}
     #endif
 
-    if(player1 == 1){ curr_state = SEND_SF; }
-    else{ curr_state = WAIT_SF; }
+    curr_state = SEND_SF;
     
 }
 
@@ -566,6 +566,14 @@ int receive_msg_with_certain_prefix(const char* prefix){ //----0 if not received
         }        
     }
     return 0;
+}
+
+void clear_UART_RX_buffer(void) {
+    // Check if the RXNE flag is set
+    while (USART2->ISR & USART_ISR_RXNE) {
+        // Read the RDR to clear the RXNE flag
+        volatile char temp = USART2->RDR;
+    }
 }
 
 void place_boat(uint8_t* board, uint8_t row, uint8_t col, uint8_t size, uint8_t direction){
@@ -638,6 +646,17 @@ int check_win_or_loss(void){                            //------------------Chec
     }else{
         return 0;
     }
+}
+
+int get_hit_count(uint8_t* board){
+    int hit_count = 0;
+    for(uint8_t i = 0; i < 100; i++){
+        if(board[i] == 1){
+            hit_count++;
+        }
+    }
+    return hit_count;
+
 }
 
 void SEND_Board_messages(void){
@@ -777,9 +796,11 @@ void place_boats_standard(uint8_t* board){ //--------------fixed layout, used if
 
 Shot find_next_shot(uint8_t* enemyboard){
 
-    //uint8_t longest_ship = find_longest_known_ship(enemyboard);
+    uint8_t longest_ship = find_longest_available_ship(enemyboard);
+    #ifdef DEBUG_HTERM
+    LOG("longest ship: %d\n", longest_ship);
+    #endif
 
-    //int direction = 0; //--------------0 for no, 1 for north, 2 for east, 3 for south, 4 for west
     int prefer_random = 0;
     int c = 0;
     int r = 0;
@@ -868,6 +889,12 @@ uint8_t are_adjacent_hits(uint8_t* enemyboard, uint8_t row, uint8_t col){
     if (col - 1 >= 0 && enemyboard[row*10 + col - 1] == 2){
         return 1;
     }
+    if (row + 1 < 10 && enemyboard[(row + 1)*10 + col] == 2){
+        return 1;
+    }
+    if (row - 1 >= 0 && enemyboard[(row - 1)*10 + col] == 2){
+        return 1;
+    }
     return 0;
 }
 
@@ -882,40 +909,43 @@ Shot find_next_shot_dumb(uint8_t* enemyboard){
     return (Shot){0, 0};
 }
 
-uint8_t find_longest_known_ship(uint8_t* board){
 
+uint8_t find_longest_available_ship(uint8_t* board){
+    uint8_t ship_list[] = {5, 4, 4, 3, 3, 3, 2, 2, 2, 2};       //--------------list of all ships
+    uint8_t ship_length_v = 0;                                  //--------------length of the ship vertically
+    uint8_t ship_length_h = 0;                                  //--------------length of the ship horizontally
+
+    for(uint8_t col = 0; col < 10; col++){                      //--------------iterate through the board
+        for(uint8_t row = 0; row < 10; row++){
+            if(board[row*10 + col] == 2){                       //--------------look for vertically placed ships
+                ship_length_v++;
+            }else{
+                for(uint8_t i = 0; i < 10; i++){
+                    if(ship_list[i] == ship_length_v){          //--------------eliminate ship from list
+                        ship_list[i] = 0;
+                    }
+                }
+                ship_length_v = 0;
+            }
+            if(board[col*10 + row] == 2){                       //--------------look for horizontally placed ships
+                ship_length_h++;
+            }else{
+                for(uint8_t i = 0; i < 10; i++){
+                    if(ship_list[i] == ship_length_h){          //--------------eliminate ship from list
+                        ship_list[i] = 0;
+                        break;
+                    }
+                }
+                ship_length_h = 0;
+            }
+        }
+    }
     uint8_t longest_ship = 0;
-
-    for (int col = 0; col < 10; col++){
-        uint8_t ship_length = 0;
-        for (int row = 0; row < 10; row++){
-            if (board[row*10 + col] == 2){
-                ship_length++;
-            }else{
-                if (ship_length > longest_ship){
-                    longest_ship = ship_length;
-                }
-                ship_length = 0;
-            
-            }
-        }
-        
-    }
-
-    for (int row = 0; row < 10; row++){
-        uint8_t ship_length = 0;
-        for (int col = 0; col < 10; col++){
-            if (board[row*10 + col] == 2){
-                ship_length++;
-            }else{
-                if (ship_length > longest_ship){
-                    longest_ship = ship_length;
-                }
-                ship_length = 0;
-            }
+    for(uint8_t i = 0; i < 10; i++){                    //--------------find longest ship left in the list
+        if(ship_list[i] > longest_ship){
+            longest_ship = ship_list[i];
         }
     }
-
     return longest_ship;
 }
 
@@ -1015,16 +1045,28 @@ uint8_t they_using_my_cs(uint8_t* myweights, Shot their_last_shot){
 }
 
 void reset_game(void){              //--------------reset all variables to start a new game, not used, just press reset-button
+    curr_state = IDLE;
+    seed = 0;
     player1 = 0;
     gamestatus = 0;
+    gameiterations = 0;
+    rx_index = 0;
     field_msgs_count = 0;
-    for ( int i = 0; i < 10*10; i++){
+    hit_mycs_count = 0;
+    for ( int i = 0; i < 100; i++){
         myboard[i] = 0;
         enemyboard[i] = 0;
         hits_on_me[i] = 0;
-        enemycs[i] = 0;
-        shoot_weights[i] = 0;
-
         field_msgs[i] = 0;
     }
+    for(int i = 0; i < 10; i++){
+        myweights[i] = 0;
+        shoot_weights[i] = 0;
+        enemycs[i] = 0;
+    }
+    for (int i = 0; i < BUFFERSIZE; i++){
+        rx_buffer[i] = 0;
+    }
+
+    clear_UART_RX_buffer();
 }
