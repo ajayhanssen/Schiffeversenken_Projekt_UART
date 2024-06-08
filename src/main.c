@@ -16,6 +16,8 @@
 //#define CHEATING_LOG_ACTIVE
 //#define LOG_MESSAGES_ACTIVE
 //#define REAL_OPPONENT
+//#define INSTANT_RESTART
+#define SMARTNESS_GO_BRR
 
 // This is a simple macro to print debug messages if DEBUG is defined
 #ifdef DEBUG
@@ -25,7 +27,7 @@
 #endif
 
 #define BAUDRATE 9600
-#define BUFFERSIZE 100
+#define BUFFERSIZE 255
 
 // For supporting printf function we override the _write function to redirect the output to UART
 int _write( int handle, char* data, int size ) {
@@ -97,7 +99,33 @@ void blue_button_config(void){
     GPIOC->PUPDR |= GPIO_PUPDR_PUPDR13_0;
 }
 
+void setLEDColor(char color){
+    GPIOA->BSRR |= GPIO_BSRR_BS_8;
+    GPIOA->BSRR |= GPIO_BSRR_BS_9;
+    GPIOC->BSRR |= GPIO_BSRR_BS_7;
+
+    switch(color){
+        case 'R':
+            GPIOA->BSRR |= GPIO_BSRR_BR_8;
+            break;
+        case 'G':
+            GPIOA->BSRR |= GPIO_BSRR_BR_9;
+            break;
+        case 'B':
+            GPIOC->BSRR |= GPIO_BSRR_BR_7;
+            break;
+        case 'V':
+            GPIOA->BSRR |= GPIO_BSRR_BR_8;
+            GPIOC->BSRR |= GPIO_BSRR_BR_7;
+            break;
+        default:
+            break;
+    }
+
+}
+
 //-----------------Create Signatures of Statemachine functions
+void Clear(void);
 void Idle(void);
 
 void StartS1(void);
@@ -119,14 +147,15 @@ void GameEnd(void);
 void ProtocolError(void);
 void initializeSM(void);
 
-typedef enum {IDLE=0, 
+typedef enum {CLEAR=0,
+                IDLE, 
                 STARTS1, STARTS1_SEND_CS, STARTS1_WAIT_START,
                 STARTS2, STARTS2_WAIT_CS, STARTS2_SEND_START,
                 OFFENSE_SHOOT, OFFENSE_WAIT,
                 DEFENSE,
                 SEND_SF, WAIT_SF,
                 GAMEEND, PROTOCOLERROR} State_Type;
-static void (*state_table[])(void)={Idle, 
+static void (*state_table[])(void)={Clear, Idle, 
                                     StartS1, StartS1_send_CS, StartS1_wait_Start,
                                     StartS2, StartS2_wait_CS, StartS2_send_Start,
                                     Offense_shoot, Offense_wait,
@@ -166,11 +195,13 @@ Shot find_next_shot(uint8_t* enemyboard);
 Shot find_next_shot_dumb(uint8_t* enemyboard);
 uint8_t are_adjacent_hits(uint8_t* enemyboard, uint8_t row, uint8_t col);
 uint8_t find_longest_available_ship(uint8_t* board);
+uint8_t get_hit_count(uint8_t* board, uint8_t hit_type);
 
 static Shot last_shot = {0, 0};
 
 #ifdef DEBUG_HTERM
 char st_ch = 'x';
+static uint32_t modcount = 0;
 #else
 char st_ch = '\n';
 #endif
@@ -181,10 +212,18 @@ int main(void){
     UART1_config();
     UART2_config();
 
+    //-----------------Configure the GPIOs
+    RCC->AHBENR |= RCC_AHBENR_GPIOAEN;
+    RCC->AHBENR |= RCC_AHBENR_GPIOCEN;
+    GPIO_OUTPUT_CONFIG(GPIOA, 8); // PIN D7 /-R-/
+    GPIO_OUTPUT_CONFIG(GPIOA, 9); // PIN D8 /-G-/
+    GPIO_OUTPUT_CONFIG(GPIOC, 7); // PIN D9 /-B-/
+
+
     // Enable the GPIOC peripheral clock
     RCC->AHBENR |= RCC_AHBENR_GPIOCEN;
     blue_button_config();
-    GPIO_OUTPUT_CONFIG(GPIOA, 5);
+    GPIO_OUTPUT_CONFIG(GPIOA, 5); // GREEN LED PA5
 
     initializeSM();
     clear_UART_RX_buffer();
@@ -193,27 +232,47 @@ int main(void){
     
         state_table[curr_state]();
 
+        #ifdef DEBUG_HTERM
+        modcount++;
+        if(modcount > 25000){
+            modcount = 0;
+        }
+        #endif
+
     }   
 }
 
 
 void initializeSM(void){
-    curr_state = IDLE;
+    curr_state = CLEAR;
 }
 
 //-----------------Implement the Statemachine functions-----------------
+
+//-----------------Clear State
+void Clear(void){
+    clear_UART_RX_buffer();
+    #ifdef DEBUG_HTERM
+    LOG("Reset Everything\n");
+    #endif
+    curr_state = IDLE;
+
+}
+
 
 //-----------------Idle State
 void Idle(void){
     // If correct Start-Message is received, my yConti becomes S2
     //reset_game();
-
+    setLEDColor('V'); // Violet LED Configuration
 
     int msg_status = receive_msg_with_certain_prefix("START"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
     if(msg_status == 1){
-        curr_state = STARTS2;
         srand(seed);
+        clear_UART_RX_buffer();
+        setLEDColor('O');
+        curr_state = STARTS2;
     }else if(msg_status == 2){
         LOG("Invalid Message\n");
     }
@@ -229,6 +288,8 @@ void Idle(void){
         #endif
 
         srand(seed);
+        clear_UART_RX_buffer();
+        setLEDColor('O');
         curr_state = STARTS1;
     }
 
@@ -363,8 +424,11 @@ void Offense_shoot(void){
 
     char shoot_msg[8] = {'B', 'O', 'O', 'M', '0', '0', '\n', '\0'};
     
+    #ifdef SMARTNESS_GO_BRR
     Shot next_shot = find_next_shot(enemyboard);
-    //Shot next_shot = find_next_shot_dumb(enemyboard);
+    #else
+    Shot next_shot = find_next_shot_dumb(enemyboard);
+    #endif
 
     shoot_msg[4] = '0' + next_shot.col;
     shoot_msg[5] = '0' + next_shot.row;
@@ -418,13 +482,22 @@ void Offense_wait(void){
                 enemyboard[last_shot.row*10 + last_shot.col] = 1;
                 curr_state = DEFENSE;                                 //------------------Change the state, going to Defense
             }else if(rx_buffer[0]=='S'){
+
+                #ifdef DEBUG_HTERM
+                LOG("fm rec, i won\n");
+                #endif
+
                 for(int i = 0; i < 10; i++){
                     field_msgs[field_msgs_count*10 + i] = rx_buffer[i+4] - '0';
                 }
                 field_msgs_count++;
-                curr_state = GAMEEND;
-            }
 
+                gamestatus = 1;
+                curr_state = GAMEEND;
+                #ifdef REAL_OPPONENT
+                LOG("I won\n");
+                #endif
+            }
 
             rx_index = 0;
         }else if (rx_index < BUFFERSIZE - 1){
@@ -446,12 +519,16 @@ void Defense(void){
         received_shot.col = rx_buffer[4] - '0';                         //------------------Get the row of the shot
         received_shot.row = rx_buffer[5] - '0';                         //------------------Get the col of the shot
 
-        uint8_t hits_on_me_count = get_hit_count(hits_on_me);           //------------------Get the number of hits on me
+        uint8_t hits_on_me_count = get_hit_count(hits_on_me, 1);           //------------------Get the number of hits on me
+        #ifdef DEBUG_HTERM
+        //LOG("hits on me: %d\n", hits_on_me_count);
+        #endif
 
         if(myboard[received_shot.row*10 + received_shot.col] != 0){
             
             if(hits_on_me_count == 29){
                 curr_state = GAMEEND;
+                gamestatus = 2;
             }else{
                 #ifdef REAL_OPPONENT
                 SEND("T\n");                                                //------------------If hit, send T
@@ -496,44 +573,71 @@ void Defense(void){
     }
 }
 
+void GameEnd(void){
+
+    #ifdef DEBUG_HTERM
+    if(player1 == 1){LOG("Game ended, i am player 1\n")}else{LOG("Game ended, i am player 2\n")}
+    #endif
+    // LEDS einschalten
+    curr_state = SEND_SF;
+    
+}
+
 void Send_SF(void){
     SEND_Board_messages();
     curr_state = WAIT_SF;
 }
 
 void Wait_SF(void){
+    #ifdef DEBUG_HTERM
+    /* if(modcount == 25000){
+        LOG("%d\n", field_msgs_count);
+    } */
+    //LOG("waiting for field messages\n");
+    #endif
+    
+    /* if(field_msgs_count == 1){
+        setLEDColor('B');
+    }else{
+        setLEDColor('O');
+    } */
 
     if(field_msgs_count < 10){
         int msg_status = receive_msg_with_certain_prefix("SF"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
         if(msg_status == 1){
+            setLEDColor('B');
             for (int i = 0; i < 10; i++){
             field_msgs[field_msgs_count*10 + i] = rx_buffer[i+4] - '0';
             }
             field_msgs_count++;
-        }   
+        }
     }
     if(field_msgs_count == 10){
         curr_state = PROTOCOLERROR;
+        #ifdef DEBUG_HTERM
+        LOG("finished\n");
+        #endif
     }
 }
 
 void ProtocolError(void){
-    #ifdef DEBUG_HTERM
-    LOG("finished\n");
-    #endif
-    reset_game();
-}
-
-void GameEnd(void){
-
-    #ifdef DEBUG_HTERM
-    if(player1 == 1){LOG("Game ended, i am player 1\n")}else{LOG("Game ended, i am player 2\n")}
-    #endif
-
-    curr_state = SEND_SF;
     
+    switch(gamestatus){
+        case 1:
+            setLEDColor('G');
+            break;
+        case 2:
+            setLEDColor('R');
+            break;
+    }
+
+    #ifdef INSTANT_RESTART
+    reset_game();
+    curr_state = CLEAR;
+    #endif
 }
+
 
 
 //-----------------End of Statemachine functions-----------------
@@ -574,6 +678,11 @@ void clear_UART_RX_buffer(void) {
         // Read the RDR to clear the RXNE flag
         volatile char temp = USART2->RDR;
     }
+    for (uint8_t i = 0; i < BUFFERSIZE; i++){
+        rx_buffer[i] = 0;
+    }
+    rx_index = 0;
+    
 }
 
 void place_boat(uint8_t* board, uint8_t row, uint8_t col, uint8_t size, uint8_t direction){
@@ -648,10 +757,10 @@ int check_win_or_loss(void){                            //------------------Chec
     }
 }
 
-int get_hit_count(uint8_t* board){
+uint8_t get_hit_count(uint8_t* board, uint8_t hit_type){
     int hit_count = 0;
     for(uint8_t i = 0; i < 100; i++){
-        if(board[i] == 1){
+        if(board[i] == hit_type){
             hit_count++;
         }
     }
@@ -790,7 +899,7 @@ void place_boats_standard(uint8_t* board){ //--------------fixed layout, used if
     place_boat(myboard, 6, 8, 3, 1);
     place_boat(myboard, 9, 0, 2, 0);
     place_boat(myboard, 9, 3, 2, 0);
-    place_boat(myboard, 7, 2, 2, 0);
+    place_boat(myboard, 7, 3, 2, 0);
     place_boat(myboard, 6, 0, 2, 0);
 }
 
