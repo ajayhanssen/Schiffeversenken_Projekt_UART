@@ -6,6 +6,7 @@
 #include "gpio.h"
 #include "parsing.h"
 
+//-----------------Define DEBUG-Options-----------------
 #define DEBUG
 //#define DEBUG_SCHIFFPY
 //#define DEBUG_NO_WIN_LOOSE
@@ -13,6 +14,8 @@
 //#define DEBUG_ENDGAME_WIN
 //#define DEBUG_ENDGAME_LOSS
 //#define DEBUG_SET_LAYOUT
+
+//-----------------Define GAME-Options-----------------
 //#define CHEATING_LOG_ACTIVE
 //#define LOG_MESSAGES_ACTIVE
 //#define REAL_OPPONENT
@@ -118,6 +121,14 @@ void setLEDColor(char color){
             GPIOA->BSRR |= GPIO_BSRR_BR_8;
             GPIOC->BSRR |= GPIO_BSRR_BR_7;
             break;
+        case 'O':
+            GPIOA->BSRR |= GPIO_BSRR_BR_8;
+            GPIOA->BSRR |= GPIO_BSRR_BR_9;
+            break;
+        case 'T':
+            GPIOA->BSRR |= GPIO_BSRR_BR_9;
+            GPIOC->BSRR |= GPIO_BSRR_BR_7;
+            break;
         default:
             break;
     }
@@ -196,6 +207,7 @@ Shot find_next_shot_dumb(uint8_t* enemyboard);
 uint8_t are_adjacent_hits(uint8_t* enemyboard, uint8_t row, uint8_t col);
 uint8_t find_longest_available_ship(uint8_t* board);
 uint8_t get_hit_count(uint8_t* board, uint8_t hit_type);
+uint8_t more_than_100_iterations(void);
 
 static Shot last_shot = {0, 0};
 
@@ -229,8 +241,15 @@ int main(void){
     clear_UART_RX_buffer();
 
     for(;;){
-    
+        
         state_table[curr_state]();
+
+        if(more_than_100_iterations()){
+            curr_state = PROTOCOLERROR;
+            #ifdef REAL_OPPONENT
+            LOG("More than 100 iterations, enemy is a liar\n");
+            #endif
+        }
 
         #ifdef DEBUG_HTERM
         modcount++;
@@ -238,7 +257,6 @@ int main(void){
             modcount = 0;
         }
         #endif
-
     }   
 }
 
@@ -271,7 +289,7 @@ void Idle(void){
     if(msg_status == 1){
         srand(seed);
         clear_UART_RX_buffer();
-        setLEDColor('O');
+        setLEDColor('-');
         curr_state = STARTS2;
     }else if(msg_status == 2){
         LOG("Invalid Message\n");
@@ -289,7 +307,7 @@ void Idle(void){
 
         srand(seed);
         clear_UART_RX_buffer();
-        setLEDColor('O');
+        setLEDColor('-');
         curr_state = STARTS1;
     }
 
@@ -302,7 +320,7 @@ void Idle(void){
 
 //-----------------StartS1 State
 void StartS1(void){
-
+    setLEDColor('O');
     player1 = 1;
     int msg_status = receive_msg_with_certain_prefix("CS"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
@@ -348,6 +366,7 @@ void StartS1_wait_Start(void){
 
     if(msg_status == 1){
         //parse_message(rx_buffer);
+        setLEDColor('-');
         curr_state = OFFENSE_SHOOT;                       //-----------------Change the state, going to Offense
 
         #ifdef DEBUG
@@ -361,6 +380,7 @@ void StartS1_wait_Start(void){
 
 //-----------------StartS2 State
 void StartS2(void){
+    setLEDColor('O');
     player1 = 0;
     #ifdef DEBUG_SET_LAYOUT
     place_boats_standard(myboard);
@@ -407,7 +427,7 @@ void StartS2_send_Start(void){
     #else
     LOG("START52216067\n");
     #endif
-
+    setLEDColor('-');
     curr_state = DEFENSE;                      //-----------------Change the state, going to Defense
 }
 
@@ -419,8 +439,6 @@ void Offense_shoot(void){
     #ifdef DEBUG_LVL_2
     LOG("in Offense_shoot\n");
     #endif
-
-    gameiterations++;
 
     char shoot_msg[8] = {'B', 'O', 'O', 'M', '0', '0', '\n', '\0'};
     
@@ -442,6 +460,8 @@ void Offense_shoot(void){
 
     enemyboard[next_shot.row*10 + next_shot.col] = 1;
     last_shot = next_shot;
+
+    gameiterations++;
     curr_state = OFFENSE_WAIT;            //------------------Change the state, going to waiting for response
         
 }
@@ -451,9 +471,6 @@ void Offense_wait(void){
     //LOG("in Offense_wait\n");
     #endif
     if(USART2->ISR & USART_ISR_RXNE){
-        
-
-
         char received_char = USART2->RDR;
         if(received_char == st_ch){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';
@@ -480,23 +497,25 @@ void Offense_wait(void){
                 LOG("I missed\n");
                 #endif
                 enemyboard[last_shot.row*10 + last_shot.col] = 1;
+                gameiterations++;
                 curr_state = DEFENSE;                                 //------------------Change the state, going to Defense
-            }else if(rx_buffer[0]=='S'){
-
+            } else if (rx_buffer[0] == 'S' && rx_buffer[1] == 'F') {
                 #ifdef DEBUG_HTERM
                 LOG("fm rec, i won\n");
                 #endif
 
-                for(int i = 0; i < 10; i++){
-                    field_msgs[field_msgs_count*10 + i] = rx_buffer[i+4] - '0';
+                for (int i = 0; i < 10; i++) {
+                    field_msgs[field_msgs_count * 10 + i] = rx_buffer[i + 2] - '0'; // Adjusted index assuming "SF" is part of the message
                 }
                 field_msgs_count++;
 
-                gamestatus = 1;
-                curr_state = GAMEEND;
-                #ifdef REAL_OPPONENT
-                LOG("I won\n");
-                #endif
+                if (field_msgs_count == 10) {
+                    gamestatus = 1;
+                    curr_state = GAMEEND;
+                    #ifdef REAL_OPPONENT
+                    LOG("I won\n");
+                    #endif
+                }
             }
 
             rx_index = 0;
@@ -510,8 +529,6 @@ void Offense_wait(void){
 //-----------------Defense State
 void Defense(void){
     
-    gameiterations++;
-
     int msg_status = receive_msg_with_certain_prefix("BOOM");           //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
     if(msg_status == 1){
@@ -606,7 +623,7 @@ void Wait_SF(void){
         int msg_status = receive_msg_with_certain_prefix("SF"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
         if(msg_status == 1){
-            setLEDColor('B');
+            //setLEDColor('B');
             for (int i = 0; i < 10; i++){
             field_msgs[field_msgs_count*10 + i] = rx_buffer[i+4] - '0';
             }
@@ -630,7 +647,16 @@ void ProtocolError(void){
         case 2:
             setLEDColor('R');
             break;
+        case 0:
+            setLEDColor('T');
+            break;
     }
+
+    #ifdef REAL_OPPONENT
+    if(!is_enemy_cs_30()){ LOG("CS of enemy does not equal 30!\n"); }
+    if(!do_cs_and_hits_match()){ LOG("CS and hits do not match!\n"); }
+    if(!does_board_message_match()) { LOG("Board msg and hits do not match!\n"); }
+    #endif
 
     #ifdef INSTANT_RESTART
     reset_game();
@@ -1067,11 +1093,6 @@ uint8_t is_enemy_cs_30(int* enemycs){
         return 1;
     }else{
         return 0;
-
-        #ifdef CHEATING_LOG_ACTIVE
-        LOG("Enemy CS sum does not equal 30\n");
-        #endif
-
     }
 }
 
@@ -1091,11 +1112,6 @@ uint8_t do_cs_and_hits_match(uint8_t* enemycs, uint8_t* enemyboard){ //---------
 
         // If the hits exceed the checksum or the water tiles exceed the possible number of water tiles
         if (colhitsum > enemycs[col] || colwatersum > (10 - enemycs[col])) {
-
-            #ifdef CHEATING_LOG_ACTIVE
-            LOG("Checksum inconsistensies found\n");
-            #endif
-
             return 0;  //------------Cheating detected, more boat- or more water-hits than checksum suggests
         }
     }
@@ -1141,7 +1157,7 @@ uint8_t they_using_my_cs(uint8_t* myweights, Shot their_last_shot){
         hit_mycs_count = 0;
     }
 
-    if (hit_mycs_count >= 5){
+    if (hit_mycs_count >= 3){
 
         #ifdef CHEATING_LOG_ACTIVE
         LOG("They are probably using my checksum\n");
