@@ -21,6 +21,7 @@
 //#define REAL_OPPONENT
 //#define INSTANT_RESTART
 #define SMARTNESS_GO_BRR
+#define COUNTER_LAZINESS
 
 // This is a simple macro to print debug messages if DEBUG is defined
 #ifdef DEBUG
@@ -193,10 +194,14 @@ static uint8_t myweights[10] = {0};                                 //----------
 static uint8_t enemycs[10] = {0};                              //------------------Init enemy checksum array
 static uint8_t shoot_weights[10] = {0};                        //------------------Init weights for shooting logic array
 
+static uint8_t saved_enemy_board[10*10] = {0};                 //------------------save board of enemy for possible reusage
+static uint8_t saved_enemy_cs[10] = {0};                       //------------------save checksum of enemy for possible reusage
+
 static uint8_t field_msgs[10*10] = {0};                        //------------------Init array for holding enemy field message
 static uint8_t field_msgs_count = 0;
 
 static uint8_t hit_mycs_count = 0;                             //------------------How often they hit highest column in mycs in a row
+
 typedef struct{
     uint8_t row;
     uint8_t col;
@@ -330,6 +335,11 @@ void StartS1(void){
             shoot_weights[i] = enemycs[i];
         }
         curr_state = STARTS1_SEND_CS;                           //-----------------Change the checksum received flag    
+        
+        #ifdef COUNTER_LAZINESS
+        save_enemy_cs(enemycs, saved_enemy_cs);
+        #endif
+
     }else if(msg_status == 2){
         LOG("Invalid Message, expected CS\n");
     }
@@ -415,6 +425,11 @@ void StartS2_wait_CS(void){
             shoot_weights[i] = enemycs[i];
         }
         curr_state = STARTS2_SEND_START;                           //-----------------Change the checksum received flag
+        
+        #ifdef COUNTER_LAZINESS
+        save_enemy_cs(enemycs, saved_enemy_cs);
+        #endif
+
     }else if(msg_status == 2){
         LOG("Invalid Message, expected CS\n");
     }
@@ -606,19 +621,7 @@ void Send_SF(void){
 }
 
 void Wait_SF(void){
-    #ifdef DEBUG_HTERM
-    /* if(modcount == 25000){
-        LOG("%d\n", field_msgs_count);
-    } */
-    //LOG("waiting for field messages\n");
-    #endif
     
-    /* if(field_msgs_count == 1){
-        setLEDColor('B');
-    }else{
-        setLEDColor('O');
-    } */
-
     if(field_msgs_count < 10){
         int msg_status = receive_msg_with_certain_prefix("SF"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
@@ -631,6 +634,11 @@ void Wait_SF(void){
         }
     }
     if(field_msgs_count == 10){
+
+        #ifdef COUNTER_LAZINESS
+        reconstruct_enemy_board(field_msgs, saved_enemy_board);
+        #endif
+        
         curr_state = PROTOCOLERROR;
         #ifdef DEBUG_HTERM
         LOG("finished\n");
@@ -651,6 +659,7 @@ void ProtocolError(void){
             setLEDColor('T');
             break;
     }
+
 
     #ifdef REAL_OPPONENT
     if(!is_enemy_cs_30()){ LOG("CS of enemy does not equal 30!\n"); }
@@ -932,6 +941,18 @@ void place_boats_standard(uint8_t* board){ //--------------fixed layout, used if
 
 Shot find_next_shot(uint8_t* enemyboard){
 
+    #ifdef COUNTER_LAZINESS             //------------------if they use same checksum than before, reuse the board
+    if(arrays_match(enemycs, saved_enemy_cs, 10)){
+        for (uint8_t col = 0; col < 10; col++){
+            for (uint8_t row = 0; row < 10; row++){
+                if(saved_enemy_board[row*10 + col] != 0 && enemyboard[row*10 + col] == 0){
+                    return (Shot){row, col};
+                }
+            }
+        }
+    }
+    #endif
+
     uint8_t longest_ship = find_longest_available_ship(enemyboard);
     #ifdef DEBUG_HTERM
     LOG("longest ship: %d\n", longest_ship);
@@ -1166,6 +1187,39 @@ uint8_t they_using_my_cs(uint8_t* myweights, Shot their_last_shot){
     }else{
         return 0;
     }
+}
+
+
+void reconstruct_enemy_board(uint8_t* field_msgs, uint8_t* saved_enemy_board){
+    for (uint8_t col = 0; col < 10; col++){
+        for (uint8_t row = 0; row < 10; row++){
+            saved_enemy_board[row*10 + col] = field_msgs[col*10 + row];
+        }
+    }
+
+    #ifdef DEBUG_HTERM
+    for (uint8_t row = 0; row < 10; row++){
+        for (uint8_t col = 0; col < 10; col++){
+            LOG("%d", saved_enemy_board[row*10 + col]);
+        }
+        LOG("\n");
+    }
+    #endif
+}
+
+void save_enemy_cs(uint8_t* enemycs, uint8_t* saved_enemy_cs){
+    for (int i = 0; i < 10; i++){
+        saved_enemy_cs[i] = enemycs[i];
+    }
+}
+
+int arrays_match(uint8_t* arr1, uint8_t* arr2, int size){
+    for (int i = 0; i < size; i++){
+        if (arr1[i] != arr2[i]){
+            return 0;
+        }
+    }
+    return 1;
 }
 
 void reset_game(void){              //--------------reset all variables to start a new game, not used, just press reset-button
