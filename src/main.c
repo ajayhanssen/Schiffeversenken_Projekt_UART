@@ -826,9 +826,10 @@ uint8_t is_valid_position(uint8_t col, uint8_t row, uint8_t direction, uint8_t s
             return 0;
         }
     }
-    else {
-        return 1;
+    else { //----If direction is not 0 (horizontal) or 1 (vertical), return 0
+        return 0;
     }
+    return 1;
 }
 
 uint8_t is_not_reserved(uint8_t col, uint8_t row, uint8_t direction, uint8_t size, uint8_t* res_slots) {
@@ -848,8 +849,25 @@ uint8_t is_not_reserved(uint8_t col, uint8_t row, uint8_t direction, uint8_t siz
             }
         }
     }
-    else {
-        return 1;
+    else { //----If direction is not 0 (horizontal) or 1 (vertical), return 0
+        return 0;
+    }
+    return 1;
+}
+
+void reserve_slots(uint8_t col, uint8_t row, uint8_t direction, uint8_t size, uint8_t* res_slots) {
+    int start_col = (col > 0) ? col - 1 : 0;
+    int end_col = (direction == 0) ? col + size : col + 1;
+    end_col = (end_col < 10) ? end_col : 9;
+
+    int start_row = (row > 0) ? row - 1 : 0;
+    int end_row = (direction == 1) ? row + size : row + 1;
+    end_row = (end_row < 10) ? end_row : 9;
+
+    for (int c = start_col; c <= end_col; c++) {
+        for (int r = start_row; r <= end_row; r++) {
+            res_slots[r * 10 + c] = 1;
+        }
     }
 }
 
@@ -858,31 +876,13 @@ void place_boat_and_reserve(uint8_t col, uint8_t row, uint8_t direction, uint8_t
     if (direction == 0) {
         for (int i = 0; i < size; i++) {
             board[row * 10 + col + i] = size;
-            //res_slots[row*10 + col + i] = 1;
-
-            for (int c = col - 1; c <= col + size; c++) {
-                for (int r = row - 1; r <= row + 1; r++) {
-                    if (c >= 0 && c < 10 && r >= 0 && r < 10) {
-                        res_slots[r * 10 + c] = 1;
-                    }
-                }
-            }
         }
-    }
-    else if (direction == 1) {
+    } else if (direction == 1) {
         for (int i = 0; i < size; i++) {
             board[(row + i) * 10 + col] = size;
-            //res_slots[(row + i)*10 + col] = 1;
-
-            for (int c = col - 1; c <= col + 1; c++) {
-                for (int r = row - 1; r <= row + size; r++) {
-                    if (c >= 0 && c < 10 && r >= 0 && r < 10) {
-                        res_slots[r * 10 + c] = 1;
-                    }
-                }
-            }
         }
     }
+    reserve_slots(col, row, direction, size, res_slots);
 
 }
 void place_boats_randomly(uint8_t* board) {
@@ -891,7 +891,7 @@ void place_boats_randomly(uint8_t* board) {
     uint8_t boat_sizes[] = { 5, 4, 4, 3, 3, 3, 2, 2, 2, 2 };                //------------------array of the boats needed to be placed
     uint8_t array_size = sizeof(boat_sizes) / sizeof(boat_sizes[0]);            //------------------calcing size of the array
 
-    for (uint8_t boat = 0; boat < array_size; boat++) {
+    for (int8_t boat = 0; boat < array_size; boat++) {
         uint8_t tries = 0;
         uint8_t placed = 0;
 
@@ -909,8 +909,9 @@ void place_boats_randomly(uint8_t* board) {
             tries++;
         }
         if (!placed) {
-            for (uint8_t i = 0; i < 100; i++) { board[i] = 0; }
-            place_boats_standard(board); //------------------if no valid random placement was found, place standard layout
+            memset(board, 0, 100); //------------------if no valid random placement was found, reset the board
+            memset(res_fields, 0, 100); //------------------if no valid random placement was found, reset the reservations
+            boat = -1;
         } 
     }
 }
@@ -1005,10 +1006,8 @@ Shot find_next_shot(uint8_t* enemyboard){
         uint8_t randrow = rand() % 10;
         if (enemyboard[randrow*10 + chosen_col] == 0){
             
-            if(are_adjacent_hits(enemyboard, randrow, chosen_col) == 1){ //--------------if there have been hits in adjacent columns, shoot with 1/10 chance
-                if (rand() % 30 == 0){
-                    return (Shot){randrow, chosen_col};
-                }
+            if(are_adjacent_hits(enemyboard, randrow, chosen_col) == 1){ //--------------if there have been hits in adjacent spots, continue
+                continue;
             }else{                                                       //--------------if there have not been hits in adjacent columns, shoot there
                 return (Shot){randrow, chosen_col};
             }
@@ -1018,17 +1017,17 @@ Shot find_next_shot(uint8_t* enemyboard){
 }
 
 uint8_t are_adjacent_hits(uint8_t* enemyboard, uint8_t row, uint8_t col){
-    if (col + 1 < 10 && enemyboard[row*10 + col + 1] == 2){
-        return 1;
-    }
-    if (col - 1 >= 0 && enemyboard[row*10 + col - 1] == 2){
-        return 1;
-    }
-    if (row + 1 < 10 && enemyboard[(row + 1)*10 + col] == 2){
-        return 1;
-    }
-    if (row - 1 >= 0 && enemyboard[(row - 1)*10 + col] == 2){
-        return 1;
+    
+    uint8_t start_col = (col > 0) ? col - 1 : 0;
+    uint8_t end_col = (col < 9) ? col + 1 : 9;
+    uint8_t start_row = (row > 0) ? row - 1 : 0;
+    uint8_t end_row = (row < 9) ? row + 1 : 9;
+    for (uint8_t c = start_col; c <= end_col; c++){
+        for (uint8_t r = start_row; r <= end_row; r++){
+            if (enemyboard[r*10 + c] == 2){
+                return 1;
+            }
+        }
     }
     return 0;
 }
