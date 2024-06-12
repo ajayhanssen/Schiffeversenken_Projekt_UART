@@ -22,6 +22,7 @@
 //#define INSTANT_RESTART
 #define SMARTNESS_GO_BRR
 #define COUNTER_LAZINESS
+//#define ACTIVATE_TIMEOUT
 
 // This is a simple macro to print debug messages if DEBUG is defined
 #ifdef DEBUG
@@ -80,12 +81,12 @@ void UART1_config(void){
     // Enable peripheral  USART2 clock
     RCC->APB2ENR |= RCC_APB2ENR_USART1EN;
 
-    // Configure PA2 as USART2_TX using alternate function 1
-    GPIOA->MODER |= GPIO_MODER_MODER9_1;
+    // Configure PB6 as USART2_TX using alternate function 1
+    GPIOA->MODER |= GPIO_MODER_MODER6_1;
     GPIOA->AFR[0] |= 0b0001 << (4*2);
 
 
-    // Configure PA3 as USART2_RX using alternate function 1
+    // Configure PA10 as USART2_RX using alternate function 1
     GPIOA->MODER |= GPIO_MODER_MODER10_1;
     GPIOA->AFR[0] |= 0b0001 << (4*3);
 
@@ -228,6 +229,9 @@ int main(void){
     EPL_SystemClock_Config();
     UART1_config();
     UART2_config();
+    #ifdef ACTIVATE_TIMEOUT
+    timer_init();
+    #endif
 
     //-----------------Configure the GPIOs
     RCC->AHBENR |= RCC_AHBENR_GPIOAEN;
@@ -256,12 +260,6 @@ int main(void){
             #endif
         }
 
-        #ifdef DEBUG_HTERM
-        modcount++;
-        if(modcount > 25000){
-            modcount = 0;
-        }
-        #endif
     }   
 }
 
@@ -274,6 +272,11 @@ void initializeSM(void){
 
 //-----------------Clear State
 void Clear(void){
+
+    #ifdef ACTIVATE_TIMEOUT
+    timer_reset()
+    #endif
+
     clear_UART_RX_buffer();
     #ifdef DEBUG_HTERM
     LOG("Reset Everything\n");
@@ -286,7 +289,11 @@ void Clear(void){
 //-----------------Idle State
 void Idle(void){
     // If correct Start-Message is received, my yConti becomes S2
-    //reset_game();
+    
+    #ifdef ACTIVATE_TIMEOUT
+    timer_reset();
+    #endif
+
     setLEDColor('V'); // Violet LED Configuration
 
     int msg_status = receive_msg_with_certain_prefix("START"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
@@ -330,6 +337,11 @@ void StartS1(void){
     int msg_status = receive_msg_with_certain_prefix("CS"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
     if(msg_status == 1){
+
+        #ifdef ACTIVATE_TIMEOUT
+        timer_reset();
+        #endif
+
         for (int i = 0; i < 10; i++){
             enemycs[i] = rx_buffer[i+2] - '0';    //------------------Save the checksum of the enemy
             shoot_weights[i] = enemycs[i];
@@ -347,6 +359,11 @@ void StartS1(void){
 }
 
 void StartS1_send_CS(void){
+
+    #ifdef ACTIVATE_TIMEOUT
+    timer_reset();
+    #endif
+
     #ifdef DEBUG_SET_LAYOUT
     place_boats_standard(myboard);
     #else
@@ -375,7 +392,11 @@ void StartS1_wait_Start(void){
     int msg_status = receive_msg_with_certain_prefix("START"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
     if(msg_status == 1){
-        //parse_message(rx_buffer);
+
+        #ifdef ACTIVATE_TIMEOUT
+        timer_reset();
+        #endif
+
         setLEDColor('-');
         curr_state = OFFENSE_SHOOT;                       //-----------------Change the state, going to Offense
 
@@ -390,6 +411,11 @@ void StartS1_wait_Start(void){
 
 //-----------------StartS2 State
 void StartS2(void){
+
+    #ifdef ACTIVATE_TIMEOUT
+    timer_reset();
+    #endif
+
     setLEDColor('O');
     player1 = 0;
     #ifdef DEBUG_SET_LAYOUT
@@ -420,6 +446,11 @@ void StartS2_wait_CS(void){
     int msg_status = receive_msg_with_certain_prefix("CS"); //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
     if(msg_status == 1){
+
+        #ifdef ACTIVATE_TIMEOUT
+        timer_reset();
+        #endif
+
         for (int i = 0; i < 10; i++){
             enemycs[i] = rx_buffer[i+2] - '0';    //------------------Save the checksum of the enemy
             shoot_weights[i] = enemycs[i];
@@ -436,6 +467,11 @@ void StartS2_wait_CS(void){
 }
 
 void StartS2_send_Start(void){
+
+    #ifdef ACTIVATE_TIMEOUT
+    timer_reset();
+    #endif
+
     #ifdef REAL_OPPONENT
     SEND("START52216067\n");
     LOG("START message sent\n");
@@ -451,6 +487,11 @@ void StartS2_send_Start(void){
 // enemyboard legend: 0-->did not shoot there already, 1-->shot there already, 2-->hit
 
 void Offense_shoot(void){
+
+    #ifdef ACTIVATE_TIMEOUT
+    timer_reset();
+    #endif
+
     #ifdef DEBUG_LVL_2
     LOG("in Offense_shoot\n");
     #endif
@@ -489,6 +530,10 @@ void Offense_wait(void){
         char received_char = USART2->RDR;
         if(received_char == st_ch){                          //---------?--------If too much time has passed, CHEATER-State?
             rx_buffer[rx_index] = '\0';
+
+            #ifdef ACTIVATE_TIMEOUT
+            timer_reset();
+            #endif
 
             if(rx_buffer[0] == 'T'){
                 #ifdef REAL_OPPONENT
@@ -547,6 +592,11 @@ void Defense(void){
     int msg_status = receive_msg_with_certain_prefix("BOOM");           //----------------msg_status = 0 if not received, 1 if received, 2 if invalid message
 
     if(msg_status == 1){
+
+        #ifdef ACTIVATE_TIMEOUT
+        timer_reset();
+        #endif
+
         Shot received_shot;
         received_shot.col = rx_buffer[4] - '0';                         //------------------Get the row of the shot
         received_shot.row = rx_buffer[5] - '0';                         //------------------Get the col of the shot
@@ -607,6 +657,10 @@ void Defense(void){
 
 void GameEnd(void){
 
+    #ifdef ACTIVATE_TIMEOUT
+    timer_reset();
+    #endif
+
     #ifdef DEBUG_HTERM
     if(player1 == 1){LOG("Game ended, i am player 1\n")}else{LOG("Game ended, i am player 2\n")}
     #endif
@@ -616,6 +670,11 @@ void GameEnd(void){
 }
 
 void Send_SF(void){
+
+    #ifdef ACTIVATE_TIMEOUT
+    timer_reset();
+    #endif
+
     SEND_Board_messages();
     curr_state = WAIT_SF;
 }
@@ -635,6 +694,10 @@ void Wait_SF(void){
     }
     if(field_msgs_count == 10){
 
+        #ifdef ACTIVATE_TIMEOUT
+        timer_reset();
+        #endif
+
         #ifdef COUNTER_LAZINESS
         reconstruct_enemy_board(field_msgs, saved_enemy_board);
         #endif
@@ -648,6 +711,10 @@ void Wait_SF(void){
 
 void ProtocolError(void){
     
+    #ifdef ACTIVATE_TIMEOUT
+    timer_reset();
+    #endif
+
     switch(gamestatus){
         case 1:
             setLEDColor('G');
@@ -1220,6 +1287,35 @@ int arrays_match(uint8_t* arr1, uint8_t* arr2, int size){
         }
     }
     return 1;
+}
+
+void timer_init(void){
+    RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
+
+    TIM2->PSC = 48000-1;
+    TIM2->ARR = 1000000-1;
+
+    TIM2->DIER |= TIM_DIER_UIE;// Enable Update Interrupt
+    TIM2->CR1 |= TIM_CR1_CEN;// Enable Timer Counter
+
+
+    NVIC_EnableIRQ(TIM2_IRQn);
+}
+
+void timer_reset(void){
+    TIM2->CNT = 0;
+    TIM2->SR &= ~TIM_SR_UIF;
+}
+
+void TIM2_IRQHandler(void){
+    if(TIM2->SR & TIM_SR_UIF){
+
+        TIM2->SR &= ~TIM_SR_UIF;
+        
+        LOG("Timeout Error\n")
+        curr_state = PROTOCOLERROR;
+
+    }
 }
 
 void reset_game(void){              //--------------reset all variables to start a new game, not used, just press reset-button
